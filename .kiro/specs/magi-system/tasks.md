@@ -2,7 +2,7 @@
 
 ## Overview
 
-MAGIシステムを4段階で開発する。各段階でAgentCoreをデプロイし、Streamlitローカル起動で動作確認を行う。ストリーミングレスポンスと思考表示に対応。
+MAGIシステムを5段階で開発する。各段階でAgentCoreをデプロイし、Streamlitローカル起動で動作確認を行う。ストリーミングレスポンスと思考表示に対応。
 
 ## 開発方針
 
@@ -10,6 +10,15 @@ MAGIシステムを4段階で開発する。各段階でAgentCoreをデプロイ
 - **フロントエンド**: Kiroが実装
 - **レスポンス**: ストリーミング対応 + 思考プロセス表示
 - **段階的リリース**: 各段階でデプロイ→動作確認→次段階へ
+- **動作確認**: 各タスク完了時にユニットテスト、統合テスト、E2Eテストを実施
+
+## 動作確認の種類
+
+| 種類 | タイミング | 方法 | 目的 |
+|-----|-----------|------|------|
+| 🧪 ユニットテスト | 各タスク完了時 | `pytest` | 関数・クラス単体の動作確認 |
+| 🔗 統合テスト | サブフェーズ完了時 | ローカル実行 | コンポーネント間の連携確認 |
+| 🚀 E2Eテスト | Phase完了時 | デプロイ後 | フロント↔バックエンド全体確認 |
 
 ---
 
@@ -24,24 +33,38 @@ MAGIシステムを4段階で開発する。各段階でAgentCoreをデプロイ
   - [ ] 1.1.2 AgentCore API呼び出し関数を実装する
     - ストリーミング対応のAPI呼び出し
     - _Requirements: 5.3, 9.1_
+  - [ ] ✅ **1.1.3 動作確認: API呼び出し**
+    - 🧪 モックサーバーへの接続テスト
+    - 🧪 ストリーミングレスポンスの受信確認
 
 - [ ] 1.2 判定モードUI実装
   - [ ] 1.2.1 ストリーミング受信を実装する
     - AgentCore APIからのストリーミング処理
+    - 全イベントタイプ（thinking, tool_use, tool_stream, reasoning, verdict, final）に対応
     - _Requirements: 9.1, 9.4_
+  - [ ] ✅ **1.2.1a 動作確認: イベント処理**
+    - 🧪 各イベントタイプのパース確認
+    - 🧪 不正なJSONの処理確認
   - [ ] 1.2.2 思考プロセス表示UIを実装する
-    - 各エージェントの思考を逐次表示
+    - 各エージェントの思考（thinking）を逐次表示
+    - **ツール使用（tool_use）を「🔧 {tool}を使用中...」で表示**
+    - **推論プロセス（reasoning）を💭思考ブロックで表示**
     - _Requirements: 9.6, 12.6_
   - [ ] 1.2.3 判定結果表示を更新する
     - ストリーミング対応の3カラム表示
+    - agent_start/agent_completeでローディング状態を制御
     - _Requirements: 7.1, 7.2, 8.1_
+  - [ ] ✅ **1.2.4 動作確認: UI表示**
+    - 🔗 デモモードで3カラム表示確認
+    - 🔗 ローディング状態の遷移確認
+    - 🔗 思考・ツール使用の表示確認
 
 - [ ] 1.3 Phase 1 動作確認
   - [ ] 1.3.1 デモモードで動作確認
     - モックレスポンスでUI動作を確認
     - _Requirements: 10.3, 10.4_
   - [ ] 1.3.2 AgentCore接続で動作確認
-    - 実際のバックエンドと接続してE2Eテスト
+    - 🚀 実際のバックエンドと接続してE2Eテスト
     - _Requirements: 11.4_
 
 ---
@@ -52,16 +75,22 @@ MAGIシステムを4段階で開発する。各段階でAgentCoreをデプロイ
   - [ ] 2.1.1 モード切り替えUIを実装する
     - サイドバーでのモード選択
     - _Requirements: 6.1.2_
+  - [ ] ✅ **2.1.1a 動作確認: モード切り替え**
+    - 🔗 判定モード↔会話モードの切り替え確認
+    - 🔗 モード状態の保持確認
   - [ ] 2.1.2 会話モード表示を実装する
     - 3カラムでの回答表示（判定なし）
     - _Requirements: 6.1.6_
   - [ ] 2.1.3 会話履歴管理を実装する
     - セッション内での履歴保持
     - _Requirements: 6.4, 6.9_
+  - [ ] ✅ **2.1.4 動作確認: 会話履歴**
+    - 🧪 履歴の追加・保持確認
+    - 🧪 セッションクリア確認
 
 - [ ] 2.2 Phase 2 動作確認
   - [ ] 2.2.1 デモモードで動作確認
-  - [ ] 2.2.2 AgentCore接続で動作確認
+  - [ ] 2.2.2 🚀 AgentCore接続で動作確認
 
 ---
 
@@ -74,13 +103,16 @@ MAGIシステムを4段階で開発する。各段階でAgentCoreをデプロイ
   - [ ] 3.1.2 ロールプリセット選択を実装する
     - プリセットからの選択、カスタム入力
     - _Requirements: 9.1.2, 9.1.3_
+  - [ ] ✅ **3.1.2a 動作確認: プリセット**
+    - 🔗 プリセット選択の反映確認
+    - 🔗 カスタム入力の保存確認
   - [ ] 3.1.3 ロール変更の即時反映を実装する
     - 設定変更後の次回質問から反映
     - _Requirements: 9.1.4_
 
 - [ ] 3.2 Phase 3 動作確認
   - [ ] 3.2.1 デモモードで動作確認
-  - [ ] 3.2.2 AgentCore接続で動作確認
+  - [ ] 3.2.2 🚀 AgentCore接続で動作確認
 
 ---
 
@@ -93,13 +125,46 @@ MAGIシステムを4段階で開発する。各段階でAgentCoreをデプロイ
   - [ ] 4.1.2 モデル情報表示を実装する
     - 各モデルの特徴、コスト目安の表示
     - _Requirements: 9.2.2, 9.2.3_
+  - [ ] ✅ **4.1.2a 動作確認: モデル情報**
+    - 🔗 モデルリストの表示確認
+    - 🔗 コスト情報の表示確認
   - [ ] 4.1.3 モデル変更の即時反映を実装する
     - 設定変更後の次回質問から反映
     - _Requirements: 9.2.4_
 
 - [ ] 4.2 Phase 4 動作確認
   - [ ] 4.2.1 デモモードで動作確認
-  - [ ] 4.2.2 AgentCore接続で動作確認
+  - [ ] 4.2.2 🚀 AgentCore接続で動作確認
+
+---
+
+## Phase 5: インタリーブ思考のフロントエンド
+
+- [ ] 5.1 インタリーブ思考UI実装
+  - [ ] 5.1.1 インタリーブ思考トグルUIを実装する
+    - Claudeモデル選択時にON/OFFトグルを表示
+    - 非Claudeモデル時はトグルを無効化/非表示
+    - _Requirements: 9.3.1, 9.3.2_
+  - [ ] ✅ **5.1.1a 動作確認: トグル表示**
+    - 🔗 Claudeモデル選択時のトグル表示確認
+    - 🔗 非Claudeモデル時の非表示確認
+  - [ ] 5.1.2 思考予算設定UIを実装する
+    - budget_tokensのスライダーまたは入力フィールド
+    - デフォルト値: 4000トークン
+    - _Requirements: 9.3.6_
+  - [ ] 5.1.3 インタリーブ思考の説明UIを実装する
+    - ツールチップまたはヘルプテキストで機能説明
+    - _Requirements: 9.3.3_
+  - [ ] 5.1.4 思考プロセス表示を拡張する
+    - インタリーブ思考の中間思考をストリーミング表示
+    - _Requirements: 9.3.8_
+  - [ ] ✅ **5.1.5 動作確認: 思考表示**
+    - 🔗 reasoningイベントの表示確認
+    - 🔗 思考ブロックのスタイル確認
+
+- [ ] 5.2 Phase 5 動作確認
+  - [ ] 5.2.1 デモモードで動作確認
+  - [ ] 5.2.2 🚀 AgentCore接続で動作確認
 
 ---
 
@@ -116,44 +181,116 @@ MAGIシステムを4段階で開発する。各段階でAgentCoreをデプロイ
   - 💡 ヒント: Strands Agents SDKの基本構造を参考に
   - 📚 参考: design.mdの「Backend Components」セクション
   - _Requirements: 5.1_
+  - [ ] ✅ **動作確認: プロジェクト構造**
+    - 🧪 `python -c "from agentcore import backend"` でインポート確認
 
 - [ ] B1.2 エージェント基底クラスを実装する
   - 📁 作成: `agentcore/agents/base.py`
-  - 💡 ヒント: `MAGIAgent`基底クラス、`AgentVerdict`データクラスを定義
+  - 💡 ヒント: `MAGIAgent`基底クラス、`AgentVerdict` Pydanticモデルを定義
   - 📚 参考: design.mdの「MAGIエージェント基底クラス」
   - _Requirements: 1.1, 2.1, 3.1_
+  - [ ] ✅ **動作確認: 基底クラス**
+    - 🧪 `AgentVerdict`のバリデーションテスト
+      ```python
+      verdict = AgentVerdict(agent_name="TEST", verdict="賛成", reasoning="理由", confidence=0.8)
+      assert verdict.verdict == "賛成"
+      ```
+    - 🧪 `MAGIAgent`のインスタンス化テスト
 
 - [ ] B1.3 3エージェント（MELCHIOR/BALTHASAR/CASPER）を実装する
   - 📁 作成: `agentcore/agents/melchior.py`, `balthasar.py`, `casper.py`
   - 💡 ヒント: 各エージェントのシステムプロンプトがキー
   - 📚 参考: design.mdの各エージェント定義
   - _Requirements: 1.2, 1.3, 2.2, 2.3, 3.2, 3.3_
+  - [ ] ✅ **動作確認: 各エージェント**
+    - 🧪 各エージェントのシステムプロンプト確認
+      ```python
+      melchior = MelchiorAgent()
+      assert "科学者" in melchior._build_system_prompt()
+      ```
+    - 🔗 **統合テスト: 単体エージェントの応答確認**
+      ```python
+      # Bedrockに接続して実際に応答を取得
+      verdict = melchior.analyze("テスト質問")
+      assert verdict.verdict in ["賛成", "反対"]
+      ```
 
 - [ ] B1.4 JUDGEコンポーネントを実装する
   - 📁 作成: `agentcore/judge.py`
   - 💡 ヒント: 多数決ロジック（賛成2以上→承認、反対2以上→否決、それ以外→保留）
   - 📚 参考: design.mdの「JUDGE（統合判定と対話）」
   - _Requirements: 4.1, 4.2, 4.3_
+  - [ ] ✅ **動作確認: 多数決ロジック**
+    - 🧪 全パターンのユニットテスト
+      ```python
+      # 賛成3 → 承認
+      verdicts = [AgentVerdict(..., verdict="賛成") for _ in range(3)]
+      assert judge.integrate(verdicts).verdict == "承認"
+      
+      # 反対2, 賛成1 → 否決
+      verdicts = [AgentVerdict(..., verdict="反対"), AgentVerdict(..., verdict="反対"), AgentVerdict(..., verdict="賛成")]
+      assert judge.integrate(verdicts).verdict == "否決"
+      
+      # 賛成2, 反対1 → 承認
+      # 賛成1, 反対1, 保留1 → 保留（該当する場合）
+      ```
 
 - [ ] B1.5 判定モードハンドラーを実装する
   - 📁 作成: `agentcore/backend.py`のメインハンドラー
   - 💡 ヒント: `mode="judge"`時の処理フロー
   - 📚 参考: design.mdの「バックエンドエントリーポイント」
   - _Requirements: 5.2, 5.4_
+  - [ ] ✅ **動作確認: ハンドラー**
+    - 🧪 リクエストのパーステスト
+    - 🔗 **統合テスト: 3エージェント→JUDGE→最終判定のフロー確認**
 
 - [ ] B1.6 ストリーミングレスポンスを実装する
-  - 💡 ヒント: `AsyncGenerator`で`yield`を使用
-  - 💡 形式: `{"type": "thinking/verdict/final", "agent": "...", "content/data": ...}`
-  - 📚 参考: design.mdの「Streaming Response Schema」
+  - 💡 ヒント: `stream_async()`を使用してリアルタイムイベントを取得
+  - 💡 **イベントタイプ**:
+    - `agent_start`: エージェント処理開始
+    - `thinking`: 思考プロセス（テキスト出力）
+    - `tool_use`: ツール使用（ツール名、入力パラメータ）
+    - `tool_stream`: ツールからの出力
+    - `reasoning`: 推論プロセス（Interleaved Thinking）
+    - `verdict`: 判定結果
+    - `agent_complete`: エージェント処理完了
+    - `final`: 最終判定
+  - 📚 参考: design.mdの「Streaming Response Schema」「Streaming Event Types」
   - _Requirements: 5.3, 9.1_
+  - [ ] ✅ **動作確認: ストリーミング**
+    - 🧪 各イベントタイプのJSON形式確認
+    - 🔗 **統合テスト: ストリーミング受信確認**
+      ```python
+      async for event in run_judge_mode(question, agents, None):
+          print(event)  # 各イベントが正しい形式か確認
+      ```
 
-- [ ] B1.7 思考プロセス表示を実装する
-  - 💡 ヒント: エージェントの分析過程を`type: "thinking"`でストリーミング
+- [ ] B1.7 思考・ツール使用表示を実装する
+  - 💡 ヒント: `stream_async()`のイベントを処理
+    ```python
+    async for event in agent.stream_async(question):
+        if "data" in event:
+            yield {"type": "thinking", "agent": name, "content": event["data"]}
+        if "current_tool_use" in event:
+            yield {"type": "tool_use", "agent": name, "tool": event["current_tool_use"]["name"]}
+    ```
+  - 📚 参考: design.mdの「ストリーミングイベント処理」
   - _Requirements: 5.8_
+  - [ ] ✅ **動作確認: イベント変換**
+    - 🧪 Strands SDKイベント→MAGIイベントの変換テスト
+    - 🔗 **統合テスト: 思考・ツール使用がストリーミングされるか確認**
 
 - [ ] B1.8 AgentCoreをデプロイする
   - 💡 コマンド: `agentcore configure` → `agentcore launch`
   - _Requirements: 5.1, 11.1_
+  - [ ] ✅ **動作確認: デプロイ**
+    - 🚀 `agentcore status` でステータス確認
+    - 🚀 **E2Eテスト: curlでAPIエンドポイント確認**
+      ```bash
+      curl -X POST https://<endpoint>/invoke \
+        -H "Content-Type: application/json" \
+        -d '{"question": "テスト", "mode": "judge"}'
+      ```
 
 ---
 
@@ -163,16 +300,26 @@ MAGIシステムを4段階で開発する。各段階でAgentCoreをデプロイ
   - 💡 ヒント: `mode="chat"`時の処理フロー（判定なし、自由回答）
   - 📚 参考: design.mdの`run_chat_mode`関数
   - _Requirements: 6.1.4, 6.1.5_
+  - [ ] ✅ **動作確認: モード分岐**
+    - 🧪 `mode="judge"` と `mode="chat"` の分岐テスト
 
 - [ ] B2.2 会話コンテキスト管理を実装する
-  - 💡 ヒント: `conversation_history`を受け取り、各エージェントに渡す
+  - 💡 ヒント: `SlidingWindowConversationManager`を使用
+  - 💡 設定: `window_size=20`, `should_truncate_results=True`
   - _Requirements: 5.5, 5.6_
+  - [ ] ✅ **動作確認: Conversation Manager**
+    - 🧪 履歴が正しく保持されるか確認
+    - 🧪 window_size超過時の動作確認
 
 - [ ] B2.3 会話モードのストリーミングを実装する
   - 💡 形式: `{"type": "response", "agent": "...", "content": "..."}`
   - _Requirements: 5.3, 9.1_
+  - [ ] ✅ **動作確認: 会話ストリーミング**
+    - 🔗 **統合テスト: 会話モードのストリーミング確認**
 
 - [ ] B2.4 AgentCoreを更新デプロイする
+  - [ ] ✅ **動作確認: 更新デプロイ**
+    - 🚀 **E2Eテスト: 会話モードのAPI確認**
 
 ---
 
@@ -182,16 +329,29 @@ MAGIシステムを4段階で開発する。各段階でAgentCoreをデプロイ
   - 💡 ヒント: `AgentConfig`に`role`と`role_description`を追加
   - 📚 参考: design.mdの「Agent Configuration Model」
   - _Requirements: 9.1.4, 9.1.5_
+  - [ ] ✅ **動作確認: データモデル**
+    - 🧪 `AgentConfig`のバリデーションテスト
 
 - [ ] B3.2 ロール設定APIを実装する
   - 💡 ヒント: `agent_configs`パラメータを受け取り、システムプロンプトを動的生成
   - _Requirements: 9.1.5_
+  - [ ] ✅ **動作確認: 動的プロンプト**
+    - 🧪 カスタムロールがシステムプロンプトに反映されるか確認
+      ```python
+      config = AgentConfig(role="エンジニア", role_description="技術的観点から分析")
+      agent = MelchiorAgent(config=config)
+      assert "エンジニア" in agent._build_system_prompt()
+      ```
 
 - [ ] B3.3 デフォルトロールプリセットを作成する
   - 💡 プリセット例: 科学者/母親/女性（デフォルト）、ビジネス向け、技術向け
   - _Requirements: 9.1.2_
+  - [ ] ✅ **動作確認: プリセット**
+    - 🧪 各プリセットの内容確認
 
 - [ ] B3.4 AgentCoreを更新デプロイする
+  - [ ] ✅ **動作確認: 更新デプロイ**
+    - 🚀 **E2Eテスト: ロール設定付きリクエストの確認**
 
 ---
 
@@ -200,10 +360,19 @@ MAGIシステムを4段階で開発する。各段階でAgentCoreをデプロイ
 - [ ] B4.1 モデル設定データモデルを実装する
   - 💡 ヒント: `AgentConfig`に`model_id`を追加
   - _Requirements: 9.2.4, 9.2.5_
+  - [ ] ✅ **動作確認: モデル設定**
+    - 🧪 `model_id`のバリデーションテスト
 
 - [ ] B4.2 モデル設定APIを実装する
   - 💡 ヒント: 各エージェント初期化時に`model_id`を適用
   - _Requirements: 9.2.5_
+  - [ ] ✅ **動作確認: モデル切り替え**
+    - 🔗 **統合テスト: 異なるモデルでの応答確認**
+      ```python
+      # Haiku vs Sonnet の応答比較
+      config_haiku = AgentConfig(model_id="anthropic.claude-3-5-haiku-20241022-v1:0")
+      config_sonnet = AgentConfig(model_id="anthropic.claude-sonnet-4-20250514-v1:0")
+      ```
 
 - [ ] B4.3 利用可能モデルリストを定義する
   - 💡 モデル例:
@@ -211,19 +380,82 @@ MAGIシステムを4段階で開発する。各段階でAgentCoreをデプロイ
     - `anthropic.claude-3-5-haiku-20241022-v1:0` (Haiku 3.5)
     - `anthropic.claude-3-5-sonnet-20241022-v2:0` (Sonnet 3.5 v2)
   - _Requirements: 9.2.2_
+  - [ ] ✅ **動作確認: モデルリスト**
+    - 🧪 各モデルIDの形式確認
 
 - [ ] B4.4 AgentCoreを更新デプロイする
+  - [ ] ✅ **動作確認: 更新デプロイ**
+    - 🚀 **E2Eテスト: モデル設定付きリクエストの確認**
+
+---
+
+## Phase 5: インタリーブ思考のバックエンド
+
+- [ ] B5.1 インタリーブ思考設定を実装する
+  - 📁 更新: `agentcore/agents/base.py`
+  - 💡 ヒント: `AgentConfig`に`interleaved_thinking`と`thinking_budget_tokens`を追加
+  - 📚 参考: design.mdの「Interleaved Thinking Configuration」
+  - _Requirements: 9.3.4, 9.3.5_
+  - [ ] ✅ **動作確認: 設定追加**
+    - 🧪 `interleaved_thinking`フラグのテスト
+
+- [ ] B5.2 BedrockModel生成関数を実装する
+  - 💡 ヒント: `create_model_with_interleaved_thinking()`関数を作成
+  - 💡 設定例:
+    ```python
+    additional_request_fields={
+        'thinking': {'type': 'enabled', 'budget_tokens': 4000},
+        'anthropic_beta': ['interleaved-thinking-2025-05-14'],
+    }
+    ```
+  - _Requirements: 9.3.4, 9.3.5_
+  - [ ] ✅ **動作確認: モデル生成**
+    - 🧪 `additional_request_fields`が正しく設定されるか確認
+
+- [ ] B5.3 Claudeモデル判定関数を実装する
+  - 💡 ヒント: `is_claude_model()`でClaude 4以降かを判定
+  - 💡 対象: `claude-sonnet-4`, `claude-4`を含むモデルID
+  - _Requirements: 9.3.2_
+  - [ ] ✅ **動作確認: モデル判定**
+    - 🧪 各モデルIDの判定テスト
+      ```python
+      assert is_claude_model("anthropic.claude-sonnet-4-20250514-v1:0") == True
+      assert is_claude_model("anthropic.claude-3-5-haiku-20241022-v1:0") == False
+      ```
+
+- [ ] B5.4 インタリーブ思考の動的処理を実装する
+  - 💡 ヒント: ツール実行結果を評価し、必要に応じて追加ツール呼び出し
+  - 📚 参考: Reference/strands_agents_interleaved_thinking.md
+  - _Requirements: 9.3.7_
+  - [ ] ✅ **動作確認: 動的処理**
+    - 🔗 **統合テスト: インタリーブ思考有効時の応答確認**
+
+- [ ] B5.5 思考プロセスのストリーミングを拡張する
+  - 💡 形式: `{"type": "reasoning", "agent": "...", "content": "..."}`
+  - _Requirements: 9.3.8_
+  - [ ] ✅ **動作確認: reasoningイベント**
+    - 🔗 **統合テスト: reasoningイベントがストリーミングされるか確認**
+
+- [ ] B5.6 AgentCoreを更新デプロイする
+  - [ ] ✅ **動作確認: 更新デプロイ**
+    - 🚀 **E2Eテスト: インタリーブ思考付きリクエストの確認**
 
 ---
 
 # 最終チェックポイント
 
 - [ ] 5.1 全機能統合テスト
-  - 判定モード + 会話モード + ロール設定 + モデル設定
-  - ストリーミング + 思考表示の動作確認
+  - 🚀 判定モード + 会話モード + ロール設定 + モデル設定 + インタリーブ思考
+  - 🚀 ストリーミング + 思考・ツール使用表示の動作確認
+  - 🚀 エラーハンドリングの確認
 
-- [ ] 5.2 ドキュメント整備
+- [ ] 5.2 パフォーマンステスト
+  - 🚀 応答時間の計測
+  - 🚀 同時接続テスト
+
+- [ ] 5.3 ドキュメント整備
   - README.md、使用方法、設定ガイド
+  - API仕様書
 
 ---
 
@@ -232,5 +464,6 @@ MAGIシステムを4段階で開発する。各段階でAgentCoreをデプロイ
 - **Part A（フロントエンド）**: Kiroが実装
 - **Part B（バックエンド）**: 学習用として自己実装、Kiroがサポート
 - 各Phaseは独立してデプロイ可能
-- Phase完了ごとに動作確認を実施
+- **各タスク完了時に動作確認を実施**（🧪ユニット、🔗統合、🚀E2E）
 - バックエンド実装中に質問があれば、いつでもKiroに聞いてください
+- テストコードの書き方がわからない場合もサポートします

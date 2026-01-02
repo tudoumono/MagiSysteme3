@@ -12,6 +12,7 @@ MAGIシステムは、3つのAIエージェント（MELCHIOR、BALTHASAR、CASPE
 | 2 | 会話モード | 判定なしの自由対話 + モード切り替え |
 | 3 | ロール設定 | 各エージェントのペルソナカスタマイズ |
 | 4 | モデル設定 | 各エージェントの使用モデル選択 |
+| 5 | インタリーブ思考 | Claude選択時のインタリーブ思考ON/OFF切り替え |
 
 ### 実装分担
 
@@ -36,6 +37,8 @@ MAGIシステムは、3つのAIエージェント（MELCHIOR、BALTHASAR、CASPE
 - **Final_Verdict**: 3エージェントの判定を統合した最終判定（承認/否決/保留）
 - **Streamlit_App**: フロントエンドUIアプリケーション
 - **Backend_Service**: AgentCore Runtime上で動作するバックエンドサービス
+- **Interleaved_Thinking**: Claude 4モデルのインタリーブ思考機能。ツール呼び出し間で思考し、結果を評価して動的に処理を調整する
+- **Extended_Thinking**: 拡張思考。モデルが回答前に深く推論するための思考予算を設定する機能
 
 ## Requirements
 
@@ -189,6 +192,21 @@ MAGIシステムは、3つのAIエージェント（MELCHIOR、BALTHASAR、CASPE
 3. THE Streamlit_App SHALL 各モデルの特徴やコスト目安を表示する
 4. WHEN モデル設定が変更される THEN THE Backend_Service SHALL 次回の質問から新しいモデルを使用する
 5. THE Backend_Service SHALL 各エージェントごとに異なるモデルを使用可能にする
+
+### Requirement 9.3: インタリーブ思考機能
+
+**User Story:** As a ユーザー, I want to Claudeモデル選択時にインタリーブ思考のON/OFFを切り替える, so that より高度な推論や動的な処理調整を活用できる。
+
+#### Acceptance Criteria
+
+1. THE Streamlit_App SHALL Claudeモデル選択時にインタリーブ思考のトグルスイッチを表示する
+2. WHEN 非Claudeモデルが選択されている THEN THE Streamlit_App SHALL インタリーブ思考トグルを非表示または無効化する
+3. THE Streamlit_App SHALL インタリーブ思考の説明（ツールキップまたはヘルプテキスト）を表示する
+4. WHEN インタリーブ思考がONである THEN THE Backend_Service SHALL `anthropic_beta: ['interleaved-thinking-2025-05-14']`を設定する
+5. WHEN インタリーブ思考がONである THEN THE Backend_Service SHALL `thinking: {'type': 'enabled', 'budget_tokens': N}`を設定する
+6. THE Streamlit_App SHALL 思考予算（budget_tokens）を設定するスライダーまたは入力フィールドを提供する
+7. THE Backend_Service SHALL インタリーブ思考有効時、ツール実行結果を評価して動的に処理を調整する
+8. THE Streamlit_App SHALL インタリーブ思考の思考プロセスをストリーミング表示する
 
 ### Requirement 10: 設定とデモモード
 
