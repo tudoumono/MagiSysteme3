@@ -32,6 +32,13 @@ class AgentResponse(BaseModel):
     agent_name: str = Field(description="エージェント名")
     response: str = Field(description="回答内容")
 
+class FinalVerdict(BaseModel):
+    """最終判定結果"""
+    verdict: str = Field(description="承認 | 否決 | 保留")
+    summary: str = Field(description="統合サマリー")
+    vote_count: dict = Field(description="投票数 {'賛成': n, '反対': m}")
+    agent_verdicts: list[AgentVerdict] = Field(description="各エージェントの判定")
+
 
 # =============================================================================
 # MAGIエージェント基底クラス
@@ -75,10 +82,9 @@ class MAGIAgent:
     def analyze(self, question: str) -> AgentVerdict:
         """問いかけを分析し判定を返す"""
         return self.agent.structured_output(
-            AgentVerdict,
-            f"以下の問いかけを分析してください: {question}"
-        )
-
+            AgentVerdict,                                      # 第1引数: 出力の型
+            f"以下の問いかけを分析してください: {question}"      # 第2引数: プロンプト
+            )
 
 # =============================================================================
 # MELCHIORエージェントクラス
@@ -100,13 +106,12 @@ class MelchiorAgent(MAGIAgent):
 
     def __init__(self):
         super().__init__(
-            name="MELCHIOR-1",
-            persona="赤木ナオコ博士の科学者としての人格を持ちます。"
+            name ="MELCHIOR-1",
+            persona ="赤木ナオコ博士の科学者としての人格を持ちます。"
         )
 
     def _build_system_prompt(self) -> str:
         return self.SYSTEM_PROMPT
-
 
 # =============================================================================
 # BALTHASARエージェントクラス
@@ -135,7 +140,6 @@ class BalthasarAgent(MAGIAgent):
     def _build_system_prompt(self) -> str:
         return self.SYSTEM_PROMPT
 
-
 # =============================================================================
 # CASPERエージェントクラス
 # =============================================================================
@@ -162,50 +166,111 @@ class CasperAgent(MAGIAgent):
 
     def _build_system_prompt(self) -> str:
         return self.SYSTEM_PROMPT
-```
 
----
 
-## 次に追加予定のコード
 
-### FinalVerdictモデル
-
-```python
-class FinalVerdict(BaseModel):
-    """最終判定結果"""
-    verdict: str = Field(description="承認 | 否決 | 保留")
-    summary: str = Field(description="統合サマリー")
-    vote_count: dict = Field(description="投票数 {'賛成': n, '反対': m}")
-    agent_verdicts: list[AgentVerdict] = Field(description="各エージェントの判定")
-```
-
-### JudgeComponent
-
-```python
+# =============================================================================
+# LLM as a Judgeのエージェントクラス
+# =============================================================================
 class JudgeComponent:
     """3エージェントの判定を統合"""
 
     def integrate(self, verdicts: list[AgentVerdict]) -> FinalVerdict:
         """多数決で最終判定を決定"""
-        approve_count = sum(1 for v in verdicts if v.verdict == "賛成")
+        # 1. 賛成/反対をカウント
+        approve_count = 0
+        for v in verdicts:
+            if v.verdict == "賛成":
+                approve_count += 1
         reject_count = len(verdicts) - approve_count
 
-        if approve_count >= 2:
+        # ジェネレータ式を使った別の方法
+        # approve_count = sum(1 for v in verdicts if v.verdict == "賛成")
+        # reject_count = sum(1 for v in verdicts if v.verdict == "反対")
+
+        # 2. 多数決で判定
+        if approve_count > reject_count:
             final = "承認"
-        elif reject_count >= 2:
+        elif approve_count < reject_count:
             final = "否決"
         else:
             final = "保留"
 
+        # 3. FinalVerdictを返す
         return FinalVerdict(
             verdict=final,
-            summary=self._generate_summary(verdicts, final),
+            summary="各エージェントの意見を統合しました。",
             vote_count={"賛成": approve_count, "反対": reject_count},
             agent_verdicts=verdicts
         )
+```
 
-    def _generate_summary(self, verdicts: list[AgentVerdict], final: str) -> str:
-        """統合サマリーを生成"""
-        # 各エージェントの判定理由を統合
-        ...
+---
+
+## 次に実装予定のコード
+
+### backend.py
+
+```python
+from agents.base import (
+    MelchiorAgent,
+    BalthasarAgent,
+    CasperAgent,
+    JudgeComponent,
+    FinalVerdict
+)
+
+
+def judge_mode(question: str) -> FinalVerdict:
+    """判定モードのメインハンドラー"""
+    # 1. エージェント作成
+    melchior = MelchiorAgent()
+    balthasar = BalthasarAgent()
+    casper = CasperAgent()
+
+    # 2. 各エージェントで分析
+    verdict1 = melchior.analyze(question)
+    verdict2 = balthasar.analyze(question)
+    verdict3 = casper.analyze(question)
+
+    # 3. JUDGEで統合
+    judge = JudgeComponent()
+    final = judge.integrate([verdict1, verdict2, verdict3])
+
+    return final
+
+
+if __name__ == "__main__":
+    # テスト実行
+    result = judge_mode("AIを業務に導入すべきか？")
+    print(f"最終判定: {result.verdict}")
+    print(f"サマリー: {result.summary}")
+    print(f"投票結果: {result.vote_count}")
+```
+
+---
+
+## 学習メモ: ジェネレータ式
+
+```python
+# この書き方
+approve_count = sum(1 for v in verdicts if v.verdict == "賛成")
+
+# は、以下と同じ意味
+approve_count = 0
+for v in verdicts:
+    if v.verdict == "賛成":
+        approve_count += 1
+```
+
+### 動作の流れ
+
+```
+verdicts = [
+    AgentVerdict(verdict="賛成", ...),  # → 1を生成
+    AgentVerdict(verdict="反対", ...),  # → スキップ
+    AgentVerdict(verdict="賛成", ...),  # → 1を生成
+]
+
+sum([1, 1]) = 2
 ```

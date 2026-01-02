@@ -175,5 +175,33 @@ class JudgeComponent:
 
     def integrate(self, verdicts: list[AgentVerdict]) -> FinalVerdict:
         """多数決で最終判定を決定"""
-        # TODO: 実装する
-        pass
+        # 1. 賛成/反対をカウント
+        approve_count = 0
+        reject_count = 0
+        for v in verdicts:
+            if v.verdict == "賛成":
+                approve_count += 1
+            elif v.verdict == "反対":
+                reject_count += 1
+                
+        # ジェネレータ式を使った別の方法
+        # approve_count = sum(1 for v in verdicts if v.verdict == "賛成")
+        # reject_count = sum(1 for v in verdicts if v.verdict == "反対")
+
+        # 2. 多数決で判定
+        if approve_count > reject_count:
+            final = "承認"
+        elif approve_count < reject_count:
+            final = "否決"
+        else:
+            final = "保留"
+
+        # 3. FinalVerdictを返す
+        return FinalVerdict(
+            verdict=final,
+            summary="各エージェントの意見を統合しました。",
+            vote_count={"賛成": approve_count, "反対": reject_count},
+            agent_verdicts=verdicts
+        )
+
+

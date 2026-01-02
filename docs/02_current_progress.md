@@ -44,6 +44,12 @@ class AgentVerdict(BaseModel):
 class AgentResponse(BaseModel):
     agent_name: str
     response: str
+
+class FinalVerdict(BaseModel):
+    verdict: str              # "承認" | "否決" | "保留"
+    summary: str              # 統合サマリー
+    vote_count: dict          # {"賛成": n, "反対": m}
+    agent_verdicts: list[AgentVerdict]
 ```
 
 ### 3. 3エージェント ✅
@@ -54,33 +60,23 @@ class AgentResponse(BaseModel):
 | BalthasarAgent | BALTHASAR-2 | 母親 |
 | CasperAgent | CASPER-3 | 女性 |
 
----
-
-## 次のタスク
-
-### 4. FinalVerdictモデルの追加 🔄
-
-```python
-class FinalVerdict(BaseModel):
-    verdict: str              # "承認" | "否決" | "保留"
-    summary: str              # 統合サマリー
-    vote_count: dict          # {"賛成": n, "反対": m}
-    agent_verdicts: list[AgentVerdict]
-```
-
-### 5. JUDGEコンポーネント 📋
+### 4. JUDGEコンポーネント ✅
 
 ```python
 class JudgeComponent:
     def integrate(self, verdicts: list[AgentVerdict]) -> FinalVerdict:
         # 多数決ロジック
-        # 賛成2以上 → 承認
-        # 反対2以上 → 否決
+        # 賛成 > 反対 → 承認
+        # 賛成 < 反対 → 否決
         # それ以外 → 保留
         ...
 ```
 
-### 6. backend.py (judge_mode) 📋
+---
+
+## 次のタスク
+
+### 5. backend.py (judge_mode) 📋
 
 ```python
 def judge_mode(question: str) -> FinalVerdict:
@@ -111,10 +107,12 @@ agentcore/
 │   └── base.py          # ✅ 実装済み
 │       ├── AgentVerdict      (Pydanticモデル)
 │       ├── AgentResponse     (Pydanticモデル)
+│       ├── FinalVerdict      (Pydanticモデル) ← NEW
 │       ├── MAGIAgent         (基底クラス)
 │       ├── MelchiorAgent     (科学者)
 │       ├── BalthasarAgent    (母親)
-│       └── CasperAgent       (女性)
+│       ├── CasperAgent       (女性)
+│       └── JudgeComponent    (統合判定) ← NEW
 ├── backend.py           # 📋 これから実装
 └── requirements.txt
 ```
@@ -136,3 +134,11 @@ agentcore/
 2. **super().__init__()** - 親クラスの初期化を呼び出す
 3. **メソッドオーバーライド** - `_build_system_prompt()`を上書き
 4. **クラス変数** - `SYSTEM_PROMPT`で定数を定義
+5. **ジェネレータ式** - `sum(1 for v in verdicts if v.verdict == "賛成")`
+
+### Pydanticモデルの使い分け
+
+| モデル | 生成方法 | 説明 |
+|--------|----------|------|
+| AgentVerdict | LLMが生成 | `structured_output()`でClaudeが出力 |
+| FinalVerdict | Pythonコードが生成 | JudgeComponentが多数決で作成 |
