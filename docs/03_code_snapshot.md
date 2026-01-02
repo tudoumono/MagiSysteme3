@@ -1,7 +1,9 @@
-# コードスナップショット（現時点）
+# コードスナップショット（Step 1 完了時点）
 
-このファイルは、現時点での`base.py`の完全なコードを保存しています。
+このファイルは、Step 1（同期版）完了時点でのコードを保存しています。
 後日参照用として使用してください。
+
+**更新日:** Step 1 完了後
 
 ---
 
@@ -47,7 +49,7 @@ class FinalVerdict(BaseModel):
 class MAGIAgent:
     """MAGIエージェントの基底クラス"""
 
-    def __init__(self, name: str, persona: str, model_id: str = "anthropic.claude-sonnet-4-20250514-v1:0"):
+    def __init__(self, name: str, persona: str, model_id: str = "jp.anthropic.claude-haiku-4-5-20251001-v1:0"):
         self.name = name
         self.persona = persona
         self.model_id = model_id
@@ -55,7 +57,7 @@ class MAGIAgent:
         # BedrockModelを作成してAgentに渡す
         model = BedrockModel(
             model_id=model_id,
-            region_name="ap-northeast-1"
+            region_name="ap-northeast-1"  # 東京リージョン
         )
 
         self.agent = Agent(
@@ -169,6 +171,7 @@ class CasperAgent(MAGIAgent):
 
 
 
+
 # =============================================================================
 # LLM as a Judgeのエージェントクラス
 # =============================================================================
@@ -177,16 +180,14 @@ class JudgeComponent:
 
     def integrate(self, verdicts: list[AgentVerdict]) -> FinalVerdict:
         """多数決で最終判定を決定"""
-        # 1. 賛成/反対をカウント
+        # 1. 賛成/反対をカウント（部分一致で柔軟に検出）
         approve_count = 0
+        reject_count = 0
         for v in verdicts:
-            if v.verdict == "賛成":
+            if "賛成" in v.verdict:
                 approve_count += 1
-        reject_count = len(verdicts) - approve_count
-
-        # ジェネレータ式を使った別の方法
-        # approve_count = sum(1 for v in verdicts if v.verdict == "賛成")
-        # reject_count = sum(1 for v in verdicts if v.verdict == "反対")
+            elif "反対" in v.verdict:
+                reject_count += 1
 
         # 2. 多数決で判定
         if approve_count > reject_count:
@@ -207,11 +208,11 @@ class JudgeComponent:
 
 ---
 
-## 次に実装予定のコード
-
-### backend.py
+## agentcore/backend.py（Step 1: 同期版）
 
 ```python
+# backend.py - MAGIシステム バックエンド
+
 from agents.base import (
     MelchiorAgent,
     BalthasarAgent,
@@ -221,56 +222,102 @@ from agents.base import (
 )
 
 
-def judge_mode(question: str) -> FinalVerdict:
-    """判定モードのメインハンドラー"""
+def run_judge_mode(question: str) -> FinalVerdict:
+    """判定モード: 3エージェント → JUDGE → 最終判定"""
+
     # 1. エージェント作成
     melchior = MelchiorAgent()
     balthasar = BalthasarAgent()
     casper = CasperAgent()
 
+
     # 2. 各エージェントで分析
-    verdict1 = melchior.analyze(question)
-    verdict2 = balthasar.analyze(question)
-    verdict3 = casper.analyze(question)
+    # リストとforループを使う
+    agents = [melchior, balthasar, casper]
+    verdicts = []
+    for agent in agents:
+        verdict = agent.analyze(question)
+        verdicts.append(verdict)
 
     # 3. JUDGEで統合
+    # JudgeComponent をインスタンス化して、integrate() を呼ぶ
     judge = JudgeComponent()
-    final = judge.integrate([verdict1, verdict2, verdict3])
+    # verdicts リストを渡す
+    final_verdict = judge.integrate(verdicts)
 
-    return final
+    # 4. 結果を返す
+    # integrate() の戻り値を return する
+    return final_verdict
 
 
 if __name__ == "__main__":
-    # テスト実行
-    result = judge_mode("AIを業務に導入すべきか？")
+    result = run_judge_mode("AIを業務に導入すべきか？")
+
+    # 各エージェントの判定を確認
+    for v in result.agent_verdicts:
+        print(f"{v.agent_name}: {v.verdict} ({v.confidence})")
+        print(f"  理由: {v.reasoning}")
+        print()
+
     print(f"最終判定: {result.verdict}")
-    print(f"サマリー: {result.summary}")
     print(f"投票結果: {result.vote_count}")
+    print(f"要約: {result.summary}")
 ```
 
 ---
 
-## 学習メモ: ジェネレータ式
+## 学習メモ
+
+### 1. `in`演算子の順序（重要！）
+
+```python
+# ❌ 間違い: 長い文字列が短い文字列に含まれるかチェック
+if v.verdict in "賛成":       # "条件付き賛成" in "賛成" → False
+
+# ✅ 正しい: 短い文字列が長い文字列に含まれるかチェック
+if "賛成" in v.verdict:       # "賛成" in "条件付き賛成" → True
+```
+
+### 2. ジェネレータ式
 
 ```python
 # この書き方
-approve_count = sum(1 for v in verdicts if v.verdict == "賛成")
+approve_count = sum(1 for v in verdicts if "賛成" in v.verdict)
 
 # は、以下と同じ意味
 approve_count = 0
 for v in verdicts:
-    if v.verdict == "賛成":
+    if "賛成" in v.verdict:
         approve_count += 1
 ```
 
-### 動作の流れ
+### 3. クラス継承の流れ
 
 ```
-verdicts = [
-    AgentVerdict(verdict="賛成", ...),  # → 1を生成
-    AgentVerdict(verdict="反対", ...),  # → スキップ
-    AgentVerdict(verdict="賛成", ...),  # → 1を生成
-]
-
-sum([1, 1]) = 2
+MelchiorAgent.__init__()
+    ↓
+super().__init__(name, persona)  # 親クラスを呼び出す
+    ↓
+MAGIAgent.__init__(name, persona, model_id)
+    ↓
+self._build_system_prompt()  # ← MelchiorAgentでオーバーライドされている！
+    ↓
+MelchiorAgent._build_system_prompt()  # 子クラスのメソッドが呼ばれる
 ```
+
+### 4. 動作確認済みのモデル設定
+
+```python
+# 東京リージョン + Haiku 4.5 = 動作OK
+model = BedrockModel(
+    model_id="jp.anthropic.claude-haiku-4-5-20251001-v1:0",
+    region_name="ap-northeast-1"
+)
+```
+
+---
+
+## 次のステップ
+
+- **Step 2:** ストリーミング版（`stream_async()`）
+- **Step 3:** イベント処理（thinking, tool_use, reasoning）

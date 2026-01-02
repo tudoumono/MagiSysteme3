@@ -37,7 +37,7 @@ class FinalVerdict(BaseModel):
 class MAGIAgent:
     """MAGIエージェントの基底クラス"""
 
-    def __init__(self, name: str, persona: str, model_id: str = "anthropic.claude-sonnet-4-20250514-v1:0"):
+    def __init__(self, name: str, persona: str, model_id: str = "jp.anthropic.claude-haiku-4-5-20251001-v1:0"):
         self.name = name
         self.persona = persona
         self.model_id = model_id
@@ -45,7 +45,8 @@ class MAGIAgent:
         # BedrockModelを作成してAgentに渡す
         model = BedrockModel(
             model_id=model_id,
-            region_name="ap-northeast-1"
+            # region_name="us-east-1"  # バージニアリージョン
+            region_name="ap-northeast-1"  # 東京リージョン
         )
 
         self.agent = Agent(
@@ -179,11 +180,12 @@ class JudgeComponent:
         approve_count = 0
         reject_count = 0
         for v in verdicts:
-            if v.verdict == "賛成":
+            if "賛成" in v.verdict:
                 approve_count += 1
-            elif v.verdict == "反対":
+            elif "反対" in v.verdict:
                 reject_count += 1
-                
+
+
         # ジェネレータ式を使った別の方法
         # approve_count = sum(1 for v in verdicts if v.verdict == "賛成")
         # reject_count = sum(1 for v in verdicts if v.verdict == "反対")

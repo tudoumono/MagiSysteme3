@@ -1,5 +1,32 @@
 # 現在の進捗状況
 
+## Phase 1 実装フロー
+
+```mermaid
+graph LR
+    subgraph "Step 1: 同期版 (B1.5)"
+        A[judge_mode] --> B[3エージェント]
+        B --> C[JUDGE統合]
+        C --> D[FinalVerdict]
+    end
+
+    subgraph "Step 2: ストリーミング (B1.6)"
+        E[stream_async] --> F[イベント生成]
+        F --> G[yield chunks]
+    end
+
+    subgraph "Step 3: イベント処理 (B1.7)"
+        H[thinking] --> I[tool_use]
+        I --> J[reasoning]
+        J --> K[verdict]
+    end
+
+    D --> E
+    G --> H
+```
+
+---
+
 ## 完了したタスク
 
 ### 1. MAGIAgent基底クラス ✅
@@ -74,28 +101,134 @@ class JudgeComponent:
 
 ---
 
-## 次のタスク
+### 5. backend.py - Step 1: 同期版 (B1.5) ✅
 
-### 5. backend.py (judge_mode) 📋
+**目標:** まず動く同期版を作る → **完了！**
 
 ```python
-def judge_mode(question: str) -> FinalVerdict:
+# backend.py - MAGIシステム バックエンド
+
+from agents.base import (
+    MelchiorAgent,
+    BalthasarAgent,
+    CasperAgent,
+    JudgeComponent,
+    FinalVerdict
+)
+
+def run_judge_mode(question: str) -> FinalVerdict:
+    """判定モード: 3エージェント → JUDGE → 最終判定"""
+
     # 1. エージェント作成
     melchior = MelchiorAgent()
     balthasar = BalthasarAgent()
     casper = CasperAgent()
 
     # 2. 各エージェントで分析
-    verdict1 = melchior.analyze(question)
-    verdict2 = balthasar.analyze(question)
-    verdict3 = casper.analyze(question)
+    agents = [melchior, balthasar, casper]
+    verdicts = []
+    for agent in agents:
+        verdict = agent.analyze(question)
+        verdicts.append(verdict)
 
     # 3. JUDGEで統合
     judge = JudgeComponent()
-    final = judge.integrate([verdict1, verdict2, verdict3])
+    final_verdict = judge.integrate(verdicts)
 
-    return final
+    # 4. 結果を返す
+    return final_verdict
+
+
+if __name__ == "__main__":
+    result = run_judge_mode("AIを業務に導入すべきか？")
+
+    for v in result.agent_verdicts:
+        print(f"{v.agent_name}: {v.verdict} ({v.confidence})")
+        print(f"  理由: {v.reasoning}")
+        print()
+
+    print(f"最終判定: {result.verdict}")
+    print(f"投票結果: {result.vote_count}")
+    print(f"要約: {result.summary}")
 ```
+
+**処理フロー:**
+
+```
++--------+     +-----------+     +-----------+     +-----------+
+| 質問   | --> | MELCHIOR  | --> | BALTHASAR | --> | CASPER    |
++--------+     +-----------+     +-----------+     +-----------+
+                    |                 |                 |
+                    v                 v                 v
+               AgentVerdict     AgentVerdict     AgentVerdict
+                    |                 |                 |
+                    +--------+--------+
+                             |
+                             v
+                    +------------------+
+                    |     JUDGE        |
+                    | (多数決で統合)    |
+                    +------------------+
+                             |
+                             v
+                    +------------------+
+                    |   FinalVerdict   |
+                    +------------------+
+```
+
+**実行結果例:**
+```
+MELCHIOR-1: 条件付き賛成（慎重な推進） (0.75)
+  理由: 科学的分析では...
+
+BALTHASAR-2: 条件付き賛成 (0.75)
+  理由: 安全性と保護の観点から...
+
+CASPER-3: 条件付き賛成 (0.75)
+  理由: 人間的感情を考慮すると...
+
+最終判定: 承認
+投票結果: {'賛成': 3, '反対': 0}
+要約: 各エージェントの意見を統合しました。
+```
+
+---
+
+## 次のタスク
+
+### 6. backend.py - Step 2: ストリーミング版 (B1.6) 📋 ← 次はここ
+
+**目標:** `stream_async()` でリアルタイムイベント取得
+
+```python
+async def run_judge_mode_streaming(question: str) -> AsyncGenerator:
+    """ストリーミング対応の判定モード"""
+
+    for agent in agents:
+        yield {"type": "agent_start", "agent": agent.name}
+
+        # ストリーミングでイベント取得
+        async for event in agent.agent.stream_async(prompt):
+            # イベント処理（Step 3で詳細実装）
+            pass
+
+        yield {"type": "agent_complete", "agent": agent.name}
+
+    # 最終判定
+    yield {"type": "final", "data": final.model_dump()}
+```
+
+---
+
+### 7. backend.py - Step 3: イベント処理 (B1.7) 📋
+
+**目標:** 思考・ツール使用をストリーミング表示
+
+| イベント | Strands SDKのキー | 出力形式 |
+|---------|-------------------|----------|
+| thinking | `event["data"]` | `{"type": "thinking", "content": "..."}` |
+| tool_use | `event["current_tool_use"]` | `{"type": "tool_use", "tool": "..."}` |
+| reasoning | `event["reasoning"]` | `{"type": "reasoning", "content": "..."}` |
 
 ---
 
@@ -107,13 +240,13 @@ agentcore/
 │   └── base.py          # ✅ 実装済み
 │       ├── AgentVerdict      (Pydanticモデル)
 │       ├── AgentResponse     (Pydanticモデル)
-│       ├── FinalVerdict      (Pydanticモデル) ← NEW
+│       ├── FinalVerdict      (Pydanticモデル)
 │       ├── MAGIAgent         (基底クラス)
 │       ├── MelchiorAgent     (科学者)
 │       ├── BalthasarAgent    (母親)
 │       ├── CasperAgent       (女性)
-│       └── JudgeComponent    (統合判定) ← NEW
-├── backend.py           # 📋 これから実装
+│       └── JudgeComponent    (統合判定)
+├── backend.py           # ✅ Step 1完了（同期版）
 └── requirements.txt
 ```
 
@@ -135,6 +268,7 @@ agentcore/
 3. **メソッドオーバーライド** - `_build_system_prompt()`を上書き
 4. **クラス変数** - `SYSTEM_PROMPT`で定数を定義
 5. **ジェネレータ式** - `sum(1 for v in verdicts if v.verdict == "賛成")`
+6. **`in`演算子の順序** - `"賛成" in v.verdict`（部分文字列チェック）
 
 ### Pydanticモデルの使い分け
 
@@ -142,3 +276,52 @@ agentcore/
 |--------|----------|------|
 | AgentVerdict | LLMが生成 | `structured_output()`でClaudeが出力 |
 | FinalVerdict | Pythonコードが生成 | JudgeComponentが多数決で作成 |
+
+---
+
+## Step 1 実装で学んだこと
+
+### 1. Bedrock モデルとリージョンの組み合わせ
+
+| モデルID | リージョン | 結果 |
+|----------|-----------|------|
+| `anthropic.claude-sonnet-4-20250514-v1:0` | `ap-northeast-1` | ❌ ValidationException |
+| `anthropic.claude-sonnet-4-20250514-v1:0` | `us-east-1` | ❌ 推論プロファイル必要 |
+| `jp.anthropic.claude-haiku-4-5-20251001-v1:0` | `ap-northeast-1` | ✅ 成功 |
+
+**学び:** オンデマンドスループットで使えるモデルは限られる。推論プロファイルが必要な場合もある。
+
+### 2. LLMの出力は予測不能
+
+```python
+# 期待: "賛成" または "反対"
+# 実際: "条件付き賛成（慎重な推進）" など
+
+# 解決策: 完全一致 → 部分一致
+if v.verdict == "賛成":      # ❌ 完全一致では検出できない
+if "賛成" in v.verdict:       # ✅ 部分一致で柔軟に検出
+```
+
+### 3. `in`演算子の順序
+
+```python
+# ❌ 間違い: 長い文字列が短い文字列に含まれるかチェック
+if v.verdict in "賛成":       # "条件付き賛成" in "賛成" → False
+
+# ✅ 正しい: 短い文字列が長い文字列に含まれるかチェック
+if "賛成" in v.verdict:       # "賛成" in "条件付き賛成" → True
+```
+
+### 4. クラス継承の流れ
+
+```
+MelchiorAgent.__init__()
+    ↓
+super().__init__(name, persona)  # 親クラスを呼び出す
+    ↓
+MAGIAgent.__init__(name, persona, model_id)
+    ↓
+self._build_system_prompt()  # ← MelchiorAgentでオーバーライドされている！
+    ↓
+MelchiorAgent._build_system_prompt()  # 子クラスのメソッドが呼ばれる
+```
