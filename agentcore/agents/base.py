@@ -7,15 +7,20 @@
 #
 # 主要コンポーネント:
 # - AgentVerdict: エージェントの判定結果（Pydanticモデル）
+# - AgentResponse: 会話モード回答（Pydanticモデル、Phase 2で使用）
 # - FinalVerdict: 最終統合判定（Pydanticモデル）
+# - JudgeSummary: JUDGE統合分析結果（Pydanticモデル）
 # - MAGIAgent: エージェント基底クラス（同期/非同期分析メソッド）
-# - JudgeComponent: 多数決による判定統合
+# - MelchiorAgent: 科学者エージェント
+# - BalthasarAgent: 母親エージェント
+# - CasperAgent: 女性エージェント
+# - JudgeComponent: 多数決＋LLM統合分析による判定統合
 #
 # 使用するStrands SDK機能:
 # - BedrockModel: Amazon BedrockのLLMモデルラッパー
 # - Agent: LLMエージェントの基本単位
-# - structured_output(): 構造化出力（同期版） ← 【LLM呼び出し①】
-# - stream_async(): ストリーミング出力（非同期版） ← 【LLM呼び出し②】
+# - structured_output(): 構造化出力（同期版）
+# - stream_async(): ストリーミング出力（非同期版）
 #
 # =============================================================================
 # LLM呼び出しポイント一覧
@@ -23,15 +28,36 @@
 #
 # このファイルでLLMが呼び出される箇所:
 #
-# 1. analyze() メソッド（同期版）
+# 1. MAGIAgent.analyze() メソッド（同期版）
 #    - 呼び出し: self.agent.structured_output(AgentVerdict, prompt)
 #    - 処理: プロンプトをLLMに送信 → 構造化された判定結果を取得
+#    - 用途: 各エージェント（MELCHIOR/BALTHASAR/CASPER）の判定
 #    - LLM呼び出し回数: 1回
 #
-# 2. analyze_stream() メソッド（非同期版）
+# 2. MAGIAgent.analyze_stream() メソッド（非同期版）
 #    - 呼び出し: self.agent.stream_async(prompt, structured_output_model=AgentVerdict)
 #    - 処理: プロンプトをLLMに送信 → イベントをストリーミングで取得
+#    - 用途: 各エージェントの判定（思考プロセス表示付き）
 #    - LLM呼び出し回数: 1回（SDK 1.21.0以降）
+#
+# 3. JudgeComponent.integrate_with_analysis() メソッド
+#    - 呼び出し: self.agent.structured_output(JudgeSummary, prompt)
+#    - 処理: 3エージェントの判定を受け取り、統合分析を実行
+#    - 用途: 最終判定のサマリー・論点・推奨事項を生成
+#    - LLM呼び出し回数: 1回
+#
+# =============================================================================
+# 全体のLLM呼び出しフロー（backend.py視点）
+# =============================================================================
+#
+# run_judge_mode_stream() では以下の順序でLLMを呼び出す:
+#
+# 1. MELCHIOR-1.analyze_stream() → 【LLM呼び出し 1回目】
+# 2. BALTHASAR-2.analyze_stream() → 【LLM呼び出し 2回目】
+# 3. CASPER-3.analyze_stream() → 【LLM呼び出し 3回目】
+# 4. JudgeComponent.integrate_with_analysis() → 【LLM呼び出し 4回目】
+#
+# 合計: 4回のLLM呼び出し
 #
 # 注意: SDK 1.13.0以前では stream_async() 後に structured_output() を
 #       別途呼び出す必要があり、LLM呼び出しが2回になる問題があった
@@ -419,6 +445,24 @@ class CasperAgent(MAGIAgent):
 
 
 # =============================================================================
+# JudgeSummary（JUDGE統合分析結果）
+# =============================================================================
+
+class JudgeSummary(BaseModel):
+    """
+    JUDGEによる統合分析結果（LLMが生成）
+
+    Attributes:
+        summary: 3エージェントの意見を踏まえた統合的な分析サマリー
+        key_points: 主要な論点（箇条書き）
+        recommendation: 最終的な推奨事項
+    """
+    summary: str = Field(description="3エージェントの意見を踏まえた統合的な分析サマリー（200文字程度）")
+    key_points: list[str] = Field(description="主要な論点を3つ程度の箇条書きで")
+    recommendation: str = Field(description="最終的な推奨事項（100文字程度）")
+
+
+# =============================================================================
 # JudgeComponent（LLM as a Judge）
 # =============================================================================
 
@@ -426,27 +470,54 @@ class JudgeComponent:
     """
     3エージェントの判定を統合するコンポーネント
 
-    多数決ロジックで最終判定を決定します。
-    - 賛成 > 反対 → 承認
-    - 賛成 < 反対 → 否決
-    - 賛成 = 反対 → 保留
+    機能:
+    1. 多数決ロジックで最終判定（承認/否決/保留）を決定
+    2. LLMを使って3エージェントの意見を統合分析
+
+    Attributes:
+        agent: JUDGE用のLLMエージェント（統合分析用）
     """
 
-    def integrate(self, verdicts: list[AgentVerdict]) -> FinalVerdict:
+    SYSTEM_PROMPT = """
+    あなたはMAGIシステムのJUDGE（統合判定官）です。
+    3つのエージェント（MELCHIOR-1: 科学者、BALTHASAR-2: 母親、CASPER-3: 女性）の
+    判定結果を受け取り、それらを統合的に分析します。
+
+    あなたの役割:
+    - 各エージェントの観点を公平に考慮する
+    - 共通点と相違点を明確にする
+    - 建設的な統合サマリーを作成する
+    - 具体的で実行可能な推奨事項を提示する
+
+    注意:
+    - 最終判定（承認/否決/保留）は多数決で既に決定されています
+    - あなたの役割はその判定を踏まえた分析と推奨事項の提示です
+    """
+
+    def __init__(self, model_id: str = "jp.anthropic.claude-haiku-4-5-20251001-v1:0"):
         """
-        多数決で最終判定を決定
+        JUDGEコンポーネントを初期化
 
         Args:
-            verdicts: 各エージェントの判定リスト
+            model_id: 使用するBedrockモデルID
+        """
+        model = BedrockModel(
+            model_id=model_id,
+            region_name="ap-northeast-1"
+        )
+        self.agent = Agent(
+            model=model,
+            system_prompt=self.SYSTEM_PROMPT,
+            callback_handler=None
+        )
+
+    def _count_votes(self, verdicts: list[AgentVerdict]) -> tuple[int, int, str]:
+        """
+        投票をカウントして最終判定を決定
 
         Returns:
-            FinalVerdict: 統合された最終判定
+            tuple: (賛成数, 反対数, 最終判定)
         """
-        # ---------------------------------------------------------------------
-        # 1. 賛成/反対をカウント
-        # ---------------------------------------------------------------------
-        # "賛成" または "反対" が verdict に含まれているかで判定
-        # （"条件付き賛成" なども "賛成" としてカウント）
         approve_count = 0
         reject_count = 0
         for v in verdicts:
@@ -455,13 +526,6 @@ class JudgeComponent:
             elif "反対" in v.verdict:
                 reject_count += 1
 
-        # 別の書き方（ジェネレータ式）:
-        # approve_count = sum(1 for v in verdicts if "賛成" in v.verdict)
-        # reject_count = sum(1 for v in verdicts if "反対" in v.verdict)
-
-        # ---------------------------------------------------------------------
-        # 2. 多数決で判定
-        # ---------------------------------------------------------------------
         if approve_count > reject_count:
             final = "承認"
         elif approve_count < reject_count:
@@ -469,12 +533,114 @@ class JudgeComponent:
         else:
             final = "保留"
 
-        # ---------------------------------------------------------------------
-        # 3. FinalVerdictを返す
-        # ---------------------------------------------------------------------
+        return approve_count, reject_count, final
+
+    def integrate(self, verdicts: list[AgentVerdict]) -> FinalVerdict:
+        """
+        多数決で最終判定を決定（LLMなしの軽量版）
+
+        Args:
+            verdicts: 各エージェントの判定リスト
+
+        Returns:
+            FinalVerdict: 統合された最終判定
+        """
+        approve_count, reject_count, final = self._count_votes(verdicts)
+
         return FinalVerdict(
             verdict=final,
             summary="各エージェントの意見を統合しました。",
+            vote_count={"賛成": approve_count, "反対": reject_count},
+            agent_verdicts=verdicts
+        )
+
+    def integrate_with_analysis(self, question: str, verdicts: list[AgentVerdict]) -> FinalVerdict:
+        """
+        LLMを使って3エージェントの意見を統合分析
+
+        多数決で最終判定（承認/否決/保留）を決定した後、
+        LLMを使って統合的な分析サマリーを生成します。
+
+        処理フロー:
+        1. _count_votes() で多数決判定
+        2. 各エージェントの判定をプロンプトに整形
+        3. LLM（structured_output）で JudgeSummary を生成
+        4. JudgeSummary を FinalVerdict.summary にフォーマット
+
+        Args:
+            question: 元の問いかけ（ユーザーの質問）
+            verdicts: 各エージェントの判定リスト（3つ）
+
+        Returns:
+            FinalVerdict: LLMによる統合分析を含む最終判定
+                - verdict: "承認" | "否決" | "保留"（多数決）
+                - summary: 統合サマリー + 主要な論点 + 推奨事項（LLM生成）
+                - vote_count: {"賛成": n, "反対": m}
+                - agent_verdicts: 各エージェントの判定
+        """
+        # ---------------------------------------------------------------------
+        # 1. 多数決で最終判定を決定
+        # ---------------------------------------------------------------------
+        approve_count, reject_count, final = self._count_votes(verdicts)
+
+        # ---------------------------------------------------------------------
+        # 2. LLMに統合分析を依頼
+        # ---------------------------------------------------------------------
+        # 各エージェントの判定を文字列にフォーマット
+        verdicts_text = ""
+        for v in verdicts:
+            verdicts_text += f"""
+【{v.agent_name}】
+- 判定: {v.verdict}
+- 理由: {v.reasoning}
+- 確信度: {v.confidence}
+"""
+
+        prompt = f"""
+以下の問いかけに対する3エージェントの判定を統合分析してください。
+
+## 問いかけ
+{question}
+
+## 各エージェントの判定
+{verdicts_text}
+
+## 多数決結果
+- 賛成: {approve_count}票
+- 反対: {reject_count}票
+- 最終判定: {final}
+
+上記を踏まえ、統合的な分析サマリー、主要な論点、推奨事項を作成してください。
+"""
+
+        # =====================================================================
+        # 【LLM呼び出し④】JUDGE統合分析
+        # =====================================================================
+        # ここで Amazon Bedrock の Claude モデルに対してリクエストを送信
+        # - 送信内容: prompt（3エージェントの判定結果）+ system_prompt（JUDGE役割）
+        # - 受信内容: JudgeSummary 形式の構造化された統合分析
+        # - 出力: summary（サマリー）, key_points（論点）, recommendation（推奨事項）
+        # - 呼び出し回数: 1回
+        # - 待機: レスポンスが返るまでブロッキング
+        judge_summary = self.agent.structured_output(JudgeSummary, prompt)
+
+        # ---------------------------------------------------------------------
+        # 3. 統合サマリーを作成
+        # ---------------------------------------------------------------------
+        # key_pointsを箇条書きに変換
+        key_points_text = "\n".join([f"・{point}" for point in judge_summary.key_points])
+
+        full_summary = f"""{judge_summary.summary}
+
+【主要な論点】
+{key_points_text}
+
+【推奨事項】
+{judge_summary.recommendation}"""
+
+        return FinalVerdict(
+            verdict=final,
+            summary=full_summary,
             vote_count={"賛成": approve_count, "反対": reject_count},
             agent_verdicts=verdicts
         )

@@ -23,9 +23,11 @@
 # 1. MELCHIOR-1 の analyze() / analyze_stream() → 【LLM呼び出し 1回目】
 # 2. BALTHASAR-2 の analyze() / analyze_stream() → 【LLM呼び出し 2回目】
 # 3. CASPER-3 の analyze() / analyze_stream() → 【LLM呼び出し 3回目】
-# 4. JudgeComponent.integrate() → LLM呼び出しなし（多数決ロジックのみ）
+# 4. JudgeComponent.integrate_with_analysis() → 【LLM呼び出し 4回目】
+#    - 多数決で最終判定（承認/否決/保留）を決定
+#    - LLMで3エージェントの意見を統合分析（サマリー・論点・推奨事項）
 #
-# 合計: 3回のLLM呼び出し（各エージェントで1回ずつ）
+# 合計: 4回のLLM呼び出し
 #
 # =============================================================================
 
@@ -197,13 +199,17 @@ async def run_judge_mode_stream(question: str) -> AsyncGenerator[dict, None]:
         yield {"type": "agent_complete", "agent": agent.name}
 
     # -------------------------------------------------------------------------
-    # 4. JUDGEで統合
+    # 4. JUDGEで統合（LLMによる統合分析を含む）
     # -------------------------------------------------------------------------
-    # ※ここではLLMを呼び出していない（多数決ロジックのみ）
-    # - 3エージェントの判定を集計
-    # - 賛成 > 反対 → 承認、賛成 < 反対 → 否決、同数 → 保留
+    # - 3エージェントの判定を集計（多数決）
+    # - LLMを使って統合的な分析サマリーを生成
+    # - 【LLM呼び出し④】JUDGEが統合分析を実行
+    yield {"type": "judge_start"}
+
     judge = JudgeComponent()
-    final_verdict = judge.integrate(verdicts)
+    final_verdict = judge.integrate_with_analysis(question, verdicts)
+
+    yield {"type": "judge_complete"}
 
     # 最終判定イベント
     # model_dump(): Pydanticモデルを辞書に変換（JSON化可能）

@@ -306,35 +306,347 @@ async for event in self.agent.stream_async(
 
 ---
 
+### 8. AgentCore デプロイ (B1.8) ✅
+
+**目標:** バックエンドを AWS AgentCore にデプロイ → **完了！**
+
+#### 8.1 ツールキットのインストール
+
+```bash
+uv add bedrock-agentcore-starter-toolkit
+```
+
+#### 8.2 backend.py の AgentCore 対応
+
+```python
+# AgentCoreAppのインポート
+from bedrock_agentcore.runtime import BedrockAgentCoreApp
+
+# AgentCoreAppのインスタンス化（グローバルに1回だけ）
+app = BedrockAgentCoreApp()
+
+# エントリーポイント（ストリーミング版）
+@app.entrypoint
+async def invoke(payload: dict):
+    """
+    AgentCore エントリーポイント
+
+    Args:
+        payload: {"question": "AIを導入すべきか？"}
+
+    Yields:
+        各イベント（thinking, verdict, final など）
+    """
+    question = payload.get("question", "")
+
+    async for event in run_judge_mode_stream(question):
+        yield event
+
+# 起動
+if __name__ == "__main__":
+    app.run()
+```
+
+#### 8.3 requirements.txt
+
+```
+strands-agents
+bedrock-agentcore
+```
+
+#### 8.4 agentcore configure
+
+```bash
+agentcore configure --entrypoint backend.py
+```
+
+設定項目：
+| 項目 | 値 |
+|------|-----|
+| Agent name | backend |
+| Dependency file | requirements.txt |
+| Execution Role | 自動作成 |
+| ECR Repository | 自動作成 |
+| Authorization | IAM（デフォルト） |
+| Memory | 無効（スキップ） |
+
+#### 8.5 agentcore launch
+
+```bash
+agentcore launch
+```
+
+**デプロイ結果:**
+```
+Agent Name: backend
+Agent ARN: arn:aws:bedrock-agentcore:ap-northeast-1:262152767881:runtime/backend-bLxzrQ5K5B
+Region: ap-northeast-1
+```
+
+#### 8.6 動作確認
+
+```bash
+agentcore invoke '{"question": "AIを業務に導入すべきか？"}'
+```
+
+**実行結果例:**
+```json
+{"type": "agent_start", "agent": "MELCHIOR-1"}
+{"type": "thinking", "content": "赤木ナオコとして..."}
+{"type": "verdict", "data": {"agent_name": "MELCHIOR-1", "verdict": "反対", ...}}
+{"type": "agent_complete", "agent": "MELCHIOR-1"}
+{"type": "agent_start", "agent": "BALTHASAR-2"}
+...
+{"type": "final", "data": {"verdict": "承認", "vote_count": {"賛成": 2, "反対": 1}, ...}}
+```
+
+---
+
+## Step 3 で解決した問題
+
+### 1. IAM 権限エラー
+
+```
+User: arn:aws:iam::...:user/CLI is not authorized to perform: iam:GetRole
+```
+
+**原因:** `PowerUserAccess` では IAM 操作権限がない
+
+**解決策:** CLI ユーザーに `IAMFullAccess` ポリシーを追加
+
+### 2. AgentCore の課金体系
+
+| 状態 | 課金 |
+|------|------|
+| デプロイしたまま放置 | ❌ 無料 |
+| invoke 実行時 | ✅ $0.0895/vCPU時間 |
+| ECR ストレージ | ✅ $0.10/GB/月 |
+| LLM 呼び出し | ✅ Bedrock 料金（別途） |
+
+---
+
+## Step 3 で学んだこと
+
+### 1. AgentCore のアーキテクチャ
+
+```
+Streamlit (Lightsail)     AgentCore Runtime (AWS)
+┌─────────────────┐       ┌─────────────────┐
+│  フロントエンド   │ HTTP  │  バックエンド     │
+│                 │ ───>  │  (コンテナ)       │
+│  frontend.py    │  API  │  backend.py     │
+└─────────────────┘       └─────────────────┘
+                                  │
+                                  v
+                          Amazon Bedrock
+                          (Claude Haiku)
+```
+
+### 2. BedrockAgentCoreApp のパターン
+
+```python
+# 1. グローバルにインスタンス化
+app = BedrockAgentCoreApp()
+
+# 2. @app.entrypoint でエントリーポイントを定義
+@app.entrypoint
+async def invoke(payload):
+    ...
+    yield event  # ストリーミング
+
+# 3. app.run() で起動
+if __name__ == "__main__":
+    app.run()
+```
+
+### 3. ストリーミングの仕組み
+
+- `async def` + `yield` でストリーミング対応
+- AgentCore が AsyncGenerator を検出して自動的にストリーミングプロトコルを処理
+
+---
+
+### 9. Streamlit フロントエンド統合 (B1.9) ✅
+
+**目標:** Streamlit UI から AgentCore API を呼び出してストリーミング表示 → **完了！**
+
+#### 9.1 AgentCore API 呼び出し
+
+**ファイル:** `frontend/frontend.py`
+
+```python
+import boto3
+import json
+
+def invoke_magi_agent(question: str, runtime_arn: str) -> Generator:
+    """
+    AgentCore Runtimeを呼び出してMAGIエージェントを実行
+    """
+    # AgentCore用クライアント（bedrock-agent-runtimeではない！）
+    client = boto3.client('bedrock-agentcore', region_name='ap-northeast-1')
+
+    # ペイロードをJSON → bytes に変換
+    payload = json.dumps({"question": question}).encode('utf-8')
+
+    # AgentCore Runtime を呼び出し
+    response = client.invoke_agent_runtime(
+        agentRuntimeArn=runtime_arn,
+        payload=payload,
+        contentType='application/json',
+        accept='application/json'
+    )
+
+    # StreamingBodyからデータを読み取り
+    streaming_body = response.get('response')
+    # ... SSE形式のパース処理
+```
+
+#### 9.2 SSE形式のパース
+
+AgentCoreは **SSE（Server-Sent Events）形式** でレスポンスを返す：
+
+```
+data: {"type": "agent_start", "agent": "MELCHIOR-1"}
+data: {"type": "thinking", "content": "..."}
+data: {"type": "verdict", "data": {...}}
+data: {"type": "final", "data": {...}}
+```
+
+**パース処理:**
+```python
+# SSE形式: "data: {...}" からJSONを抽出
+if line.startswith("data: "):
+    json_str = line[6:]  # "data: " を除去
+    event = json.loads(json_str)
+    yield event
+```
+
+#### 9.3 UTF-8マルチバイト文字の対応
+
+**問題:** ストリーミングのチャンク境界で日本語（3バイト文字）が分割されるとデコードエラー
+
+```
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe3 in position 1023
+```
+
+**解決策:** 2段階バッファリング
+
+```python
+byte_buffer = b""   # バイト列バッファ（分割対策）
+text_buffer = ""    # テキストバッファ（行分割用）
+
+for chunk in streaming_body.iter_chunks():
+    byte_buffer += chunk
+    try:
+        decoded = byte_buffer.decode('utf-8')
+        byte_buffer = b""  # 成功したらクリア
+    except UnicodeDecodeError as e:
+        # 途中で切れている部分は次のチャンクまで待つ
+        valid_end = e.start
+        decoded = byte_buffer[:valid_end].decode('utf-8')
+        byte_buffer = byte_buffer[valid_end:]
+```
+
+#### 9.4 UI表示の実装
+
+```python
+# 処理中表示
+with st.spinner("MAGI システム分析中..."):
+    # イベントループ（データ収集）
+    for event in invoke_magi_agent(question, runtime_arn):
+        event_type = event.get("type")
+
+        if event_type == "agent_start":
+            current_agent = event.get("agent")
+
+        elif event_type == "thinking":
+            agent_thinking[current_agent] += event.get("content", "")
+
+        elif event_type == "verdict":
+            agent_verdicts[current_agent] = event.get("data", {})
+
+        elif event_type == "final":
+            final_data = event.get("data", {})
+
+# 結果表示
+col1, col2, col3 = st.columns(3)
+# 各エージェントのカード表示
+# 思考プロセスをエキスパンダーで表示
+# 最終判定（投票数 + サマリー）
+```
+
+#### 9.5 最終判定の詳細表示
+
+```python
+def render_final_verdict(final_data: dict):
+    """
+    最終判定の詳細表示
+
+    final_data:
+        - verdict: "承認" | "否決" | "保留"
+        - summary: 統合サマリー
+        - vote_count: {"賛成": n, "反対": m}
+        - agent_verdicts: 各エージェントの判定リスト
+    """
+    # 投票数を「2 vs 1」形式で表示
+    # サマリーを表示
+```
+
+---
+
 ## 次のタスク
 
-### 8. フロントエンド統合 📋 ← 次はここ
+### 10. 会話モード実装 📋 ← 次はここ
 
-**目標:** Streamlit UI でストリーミング表示を実装
+**目標:** Streamlit で会話モードを実装（Phase 2）
 
 ---
 
 ## ファイル構成（現在）
 
 ```
-agentcore/
-├── agents/
-│   └── base.py          # ✅ Step 2完了（同期+ストリーミング）
-│       ├── AgentVerdict      (Pydanticモデル)
-│       ├── AgentResponse     (Pydanticモデル)
-│       ├── FinalVerdict      (Pydanticモデル)
-│       ├── MAGIAgent         (基底クラス)
-│       │   ├── analyze()           # 同期版【LLM呼び出し①】
-│       │   └── analyze_stream()    # 非同期版【LLM呼び出し②】
-│       ├── MelchiorAgent     (科学者)
-│       ├── BalthasarAgent    (母親)
-│       ├── CasperAgent       (女性)
-│       └── JudgeComponent    (統合判定)
-├── backend.py           # ✅ Step 2完了（同期+ストリーミング）
-│   ├── run_judge_mode()        # 同期版
-│   └── run_judge_mode_stream() # 非同期ストリーミング版
-└── requirements.txt
+MagiSysteme3/
+├── agentcore/               # バックエンド（AWS AgentCore）
+│   ├── agents/
+│   │   └── base.py              # ✅ Step 2完了（同期+ストリーミング）
+│   │       ├── AgentVerdict          (Pydanticモデル)
+│   │       ├── AgentResponse         (Pydanticモデル)
+│   │       ├── FinalVerdict          (Pydanticモデル)
+│   │       ├── MAGIAgent             (基底クラス)
+│   │       │   ├── analyze()              # 同期版【LLM呼び出し①】
+│   │       │   └── analyze_stream()       # 非同期版【LLM呼び出し②】
+│   │       ├── MelchiorAgent         (科学者)
+│   │       ├── BalthasarAgent        (母親)
+│   │       ├── CasperAgent           (女性)
+│   │       └── JudgeComponent        (統合判定)
+│   ├── backend.py               # ✅ Step 3完了（AgentCore対応）
+│   │   ├── app = BedrockAgentCoreApp()  # グローバルインスタンス
+│   │   ├── run_judge_mode()             # 同期版
+│   │   ├── run_judge_mode_stream()      # 非同期ストリーミング版
+│   │   └── @app.entrypoint invoke()     # AgentCoreエントリーポイント
+│   ├── requirements.txt         # strands-agents, bedrock-agentcore
+│   ├── .bedrock_agentcore.yaml  # AgentCore設定ファイル（自動生成）
+│   └── .bedrock_agentcore/      # Dockerfile等（自動生成）
+│
+├── frontend/                # フロントエンド（Streamlit）
+│   └── frontend.py              # ✅ Step 4完了（AgentCore統合）
+│       ├── invoke_magi_agent()       # AgentCore API呼び出し
+│       │   ├── boto3.client('bedrock-agentcore')
+│       │   ├── invoke_agent_runtime()
+│       │   └── SSE形式パース + UTF-8バッファリング
+│       ├── render_final_verdict()    # 最終判定表示（投票数+サマリー）
+│       ├── render_agent_card()       # エージェントカード表示
+│       └── main()                    # Streamlitアプリ
+│           ├── デモモード（mock_magi_response）
+│           └── 本番モード（AgentCore呼び出し）
+│
+└── docs/                    # ドキュメント
+    └── 02_current_progress.md  # この進捗ファイル
 ```
+
+**デプロイ済みリソース:**
+- Agent ARN: `arn:aws:bedrock-agentcore:ap-northeast-1:262152767881:runtime/backend-bLxzrQ5K5B`
+- ECR: `262152767881.dkr.ecr.ap-northeast-1.amazonaws.com/bedrock-agentcore-backend`
 
 ---
 
@@ -473,3 +785,285 @@ async for event in agent.stream_async(prompt, structured_output_model=AgentVerdi
 ```
 
 **学び:** LLM呼び出しは見えにくいので、コメントで明示しておくと理解しやすい
+
+---
+
+## Step 3 (AgentCore デプロイ) で学んだこと
+
+### 1. AgentCore のデプロイフロー
+
+```bash
+# 1. ツールキットインストール
+uv add bedrock-agentcore-starter-toolkit
+
+# 2. 設定
+agentcore configure --entrypoint backend.py
+
+# 3. デプロイ
+agentcore launch
+
+# 4. 動作確認
+agentcore invoke '{"question": "..."}'
+```
+
+### 2. BedrockAgentCoreApp の基本パターン
+
+```python
+from bedrock_agentcore.runtime import BedrockAgentCoreApp
+
+# 1. グローバルにインスタンス化（1回だけ）
+app = BedrockAgentCoreApp()
+
+# 2. @app.entrypoint でエントリーポイントを定義
+@app.entrypoint
+async def invoke(payload: dict):
+    # payloadから入力を取得
+    question = payload.get("question", "")
+
+    # ストリーミングはyieldで返す
+    async for event in some_async_generator():
+        yield event
+
+# 3. app.run() で起動
+if __name__ == "__main__":
+    app.run()
+```
+
+### 3. agentcore configure の質問と回答
+
+| 質問 | 推奨回答 | 説明 |
+|------|---------|------|
+| Agent name | Enter（自動検出） | ファイル名から推測 |
+| Dependency file | Enter（requirements.txt） | 依存関係ファイル |
+| Execution Role | Enter（自動作成） | IAMロールを自動作成 |
+| ECR Repository | Enter（自動作成） | コンテナレジストリを自動作成 |
+| OAuth authorizer | Enter（no） | IAM認証を使用 |
+| Request header allowlist | Enter（no） | ヘッダー転送不要 |
+| Memory | s（スキップ） | Phase 1では不要 |
+
+### 4. IAM 権限の注意点
+
+`PowerUserAccess` では IAM 操作ができない。
+AgentCore のデプロイには以下が必要：
+- `iam:GetRole`
+- `iam:CreateRole`
+- `iam:AttachRolePolicy`
+- `iam:PassRole`
+
+**解決策:** `IAMFullAccess` を追加
+
+### 5. 課金の理解
+
+| リソース | 課金タイミング |
+|---------|--------------|
+| AgentCore Runtime | invoke 実行時のみ（待機は無料） |
+| ECR ストレージ | $0.10/GB/月（常時） |
+| Bedrock LLM | トークン使用時 |
+
+---
+
+## Step 4 (Streamlit統合) で学んだこと
+
+### 1. boto3 クライアントの違い
+
+| クライアント | 用途 |
+|-------------|------|
+| `bedrock-agent-runtime` | Bedrock Agents用（❌ AgentCoreでは使わない） |
+| `bedrock-agentcore` | AgentCore Runtime用（✅ こちらを使う） |
+
+```python
+# ❌ 間違い
+client = boto3.client('bedrock-agent-runtime')
+
+# ✅ 正しい
+client = boto3.client('bedrock-agentcore', region_name='ap-northeast-1')
+```
+
+### 2. AgentCore API の呼び出し方
+
+```python
+response = client.invoke_agent_runtime(
+    agentRuntimeArn=runtime_arn,  # ✅ 必須
+    payload=payload,              # ✅ 必須（bytes）
+    contentType='application/json',
+    accept='application/json'
+)
+```
+
+### 3. SSE（Server-Sent Events）形式
+
+AgentCore のストリーミングレスポンスは SSE 形式：
+
+```
+data: {"type": "agent_start", "agent": "MELCHIOR-1"}
+data: {"type": "thinking", "content": "これは..."}
+data: {"type": "verdict", "data": {...}}
+```
+
+**パースのポイント:**
+- 各行が `data: ` で始まる
+- `data: ` を除去してからJSONパース
+- 改行区切りで複数イベント
+
+### 4. UTF-8マルチバイト文字の罠
+
+日本語（UTF-8で3バイト）がチャンク境界で分割されるとデコードエラー：
+
+```
+「あ」= 0xE3 0x81 0x82
+        ↓
+チャンク1: [..., 0xE3]      ← 途中で切れる
+チャンク2: [0x81, 0x82, ...]
+```
+
+**解決策:** バイト列バッファで不完全なバイト列を保持し、次のチャンクで結合
+
+### 5. Streamlit のリアルタイム更新の制限
+
+- `st.empty()` は同じ場所を上書き（最終結果のみ表示）
+- リアルタイムアニメーションはStreamlitでは難しい
+- **代替案:** `st.spinner()` で処理中表示 → 完了後に結果表示
+
+### 6. エキスパンダーによる詳細表示
+
+```python
+with st.expander("💭 思考プロセスを見る"):
+    st.markdown(thinking_content)
+```
+
+- 折りたたみ式で画面を圧迫しない
+- 必要な時だけ展開して詳細を確認
+
+### 7. confidence の正規化
+
+バックエンドは `confidence` を 0-1 で返すが、UI では % 表示する：
+
+```python
+# confidence が 0-1 の場合は 100倍してパーセントに
+if isinstance(confidence, float) and confidence <= 1:
+    confidence_pct = int(confidence * 100)
+else:
+    confidence_pct = int(confidence)
+```
+
+### 8. 最終判定での各エージェント詳細表示
+
+`final_data` に含まれる `agent_verdicts` を最終判定画面に表示：
+
+```python
+def render_final_verdict(final_data: dict):
+    # ... 投票数とサマリー表示 ...
+
+    # 各エージェントの判定詳細を表示
+    if agent_verdicts:
+        st.markdown("### 📊 各エージェントの判定詳細")
+
+        for av in agent_verdicts:
+            agent_name = av.get("agent_name", "")
+            agent_verdict = av.get("verdict", "")
+            reasoning = av.get("reasoning", "")
+            confidence = av.get("confidence", 0)
+
+            # エージェント名からカラーを決定
+            agent_class = agent_name.split("-")[0].lower()
+            colors = {
+                "melchior": "#0891B2",
+                "balthasar": "#DC2626",
+                "casper": "#7C3AED"
+            }
+            # カード形式で表示
+```
+
+**学び:** `FinalVerdict.agent_verdicts` には各エージェントの完全な判定情報（理由、確信度）が含まれている。最終判定画面でこの情報を表示することで、ユーザーは「なぜこの結論に至ったか」を詳しく確認できる。
+
+---
+
+### 9. JUDGE統合分析（LLM呼び出し4回目）
+
+**目的:** 3エージェントの判定を単なる多数決ではなく、LLMを使って統合的に分析
+
+#### 9.1 JudgeSummaryモデル（Pydantic）
+
+```python
+class JudgeSummary(BaseModel):
+    """JUDGEによる統合分析結果（LLMが生成）"""
+    summary: str = Field(description="統合的な分析サマリー（200文字程度）")
+    key_points: list[str] = Field(description="主要な論点を3つ程度の箇条書きで")
+    recommendation: str = Field(description="最終的な推奨事項（100文字程度）")
+```
+
+#### 9.2 JudgeComponentの拡張
+
+```python
+class JudgeComponent:
+    SYSTEM_PROMPT = """
+    あなたはMAGIシステムのJUDGE（統合判定官）です。
+    3つのエージェント（MELCHIOR-1: 科学者、BALTHASAR-2: 母親、CASPER-3: 女性）の
+    判定結果を受け取り、それらを統合的に分析します。
+    ...
+    """
+
+    def __init__(self, model_id: str):
+        # JUDGE専用のAgentを作成
+        self.agent = Agent(model=model, system_prompt=self.SYSTEM_PROMPT)
+
+    def integrate(self, verdicts) -> FinalVerdict:
+        """多数決のみ（LLMなし）"""
+        ...
+
+    def integrate_with_analysis(self, question, verdicts) -> FinalVerdict:
+        """LLMを使った統合分析"""
+        # 1. 多数決で承認/否決/保留を決定
+        # 2. LLMに統合分析を依頼（structured_output）
+        # 3. サマリー・論点・推奨事項を含むFinalVerdictを返す
+```
+
+#### 9.3 LLM呼び出しフローの変更
+
+```
+変更前（LLM 3回）:
+MELCHIOR → BALTHASAR → CASPER → 多数決（Pythonロジック）
+
+変更後（LLM 4回）:
+MELCHIOR → BALTHASAR → CASPER → JUDGE（LLM統合分析）
+```
+
+#### 9.4 ストリーミングイベントの追加
+
+```python
+# backend.py
+yield {"type": "judge_start"}      # JUDGE分析開始
+judge.integrate_with_analysis(question, verdicts)
+yield {"type": "judge_complete"}   # JUDGE分析完了
+yield {"type": "final", "data": ...}
+```
+
+#### 9.5 フロントエンドの対応
+
+```python
+# frontend.py - イベント処理
+elif event_type == "judge_start":
+    status_placeholder.info("⚖️ JUDGE 統合分析中...")
+
+elif event_type == "judge_complete":
+    status_placeholder.info("✅ 最終判定を生成中...")
+```
+
+#### 9.6 FinalVerdict.summary の形式
+
+```
+{統合的な分析サマリー}
+
+【主要な論点】
+・論点1
+・論点2
+・論点3
+
+【推奨事項】
+{推奨事項}
+```
+
+**学び:**
+- `integrate()` と `integrate_with_analysis()` を分けることで、軽量版と高機能版を選択可能
+- JUDGEにも専用のsystem_promptを設定し、統合判定官としての役割を明確化
+- ストリーミングイベント（`judge_start`/`judge_complete`）を追加することで、UIで進捗表示が可能

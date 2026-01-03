@@ -30,7 +30,7 @@ agents:
     bedrock_agentcore:
       agent_id: backend-bLxzrQ5K5B
       agent_arn: arn:aws:bedrock-agentcore:ap-northeast-1:262152767881:runtime/backend-bLxzrQ5K5B
-      agent_session_id: 69d385fc-cfd0-4153-80f5-6a3ae8039c81
+      agent_session_id: null
     codebuild:
       project_name: bedrock-agentcore-backend-builder
       execution_role: arn:aws:iam::262152767881:role/AmazonBedrockAgentCoreSDKCodeBuild-ap-northeast-1-10e08a419e
