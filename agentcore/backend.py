@@ -41,6 +41,11 @@ from agents.base import (
 import asyncio
 from typing import AsyncGenerator
 
+# AgentCoreAppのインポート
+from bedrock_agentcore.runtime import BedrockAgentCoreApp
+
+# AgentCoreAppのインスタンス化
+app = BedrockAgentCoreApp()  
 
 # =============================================================================
 # Step 1: 同期版判定モード
@@ -250,6 +255,28 @@ async def main():
             print(event["data"])
 
 
+# ============ エントリーポイント ============
+@app.entrypoint
+async def invoke(payload: dict):
+    """
+    AgentCore エントリーポイント（ストリーミング版）
+    
+    Args:
+        payload: {"question": "AIを導入すべきか？"}
+    
+    Yields:
+        各イベント（thinking, verdict, final など）
+    """
+    # 1. payloadから question を取り出す
+    question = payload.get("question", "")
+    
+    # 2. ストリーミング版を呼び出し、イベントをそのまま yield
+    async for event in run_judge_mode_stream(question):
+        yield event
+
+
+
+
 # =============================================================================
 # スクリプト実行時のエントリーポイント
 # =============================================================================
@@ -257,4 +284,4 @@ async def main():
 if __name__ == "__main__":
     # asyncio.run() で非同期関数を実行
     # main() は async def なので、同期コンテキストから呼び出すには asyncio.run() が必要
-    asyncio.run(main())
+    app.run()                 # ← appを使う

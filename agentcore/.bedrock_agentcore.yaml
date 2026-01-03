@@ -1,0 +1,60 @@
+default_agent: backend
+agents:
+  backend:
+    name: backend
+    entrypoint: F:/10_code/06_kiro/MagiSysteme3/agentcore/backend.py
+    deployment_type: container
+    runtime_type: null
+    platform: linux/arm64
+    container_runtime: docker
+    source_path: F:\10_code\06_kiro\MagiSysteme3\agentcore
+    aws:
+      execution_role: arn:aws:iam::262152767881:role/AmazonBedrockAgentCoreSDKRuntime-ap-northeast-1-10e08a419e
+      execution_role_auto_create: false
+      account: '262152767881'
+      region: ap-northeast-1
+      ecr_repository: 262152767881.dkr.ecr.ap-northeast-1.amazonaws.com/bedrock-agentcore-backend
+      ecr_auto_create: false
+      s3_path: null
+      s3_auto_create: false
+      network_configuration:
+        network_mode: PUBLIC
+        network_mode_config: null
+      protocol_configuration:
+        server_protocol: HTTP
+      observability:
+        enabled: true
+      lifecycle_configuration:
+        idle_runtime_session_timeout: null
+        max_lifetime: null
+    bedrock_agentcore:
+      agent_id: backend-bLxzrQ5K5B
+      agent_arn: arn:aws:bedrock-agentcore:ap-northeast-1:262152767881:runtime/backend-bLxzrQ5K5B
+      agent_session_id: 69d385fc-cfd0-4153-80f5-6a3ae8039c81
+    codebuild:
+      project_name: bedrock-agentcore-backend-builder
+      execution_role: arn:aws:iam::262152767881:role/AmazonBedrockAgentCoreSDKCodeBuild-ap-northeast-1-10e08a419e
+      source_bucket: bedrock-agentcore-codebuild-sources-262152767881-ap-northeast-1
+    memory:
+      mode: NO_MEMORY
+      memory_id: null
+      memory_arn: null
+      memory_name: null
+      event_expiry_days: 30
+      first_invoke_memory_check_done: false
+      was_created_by_toolkit: false
+    identity:
+      credential_providers: []
+      workload: null
+    aws_jwt:
+      enabled: false
+      audiences: []
+      signing_algorithm: ES384
+      issuer_url: null
+      duration_seconds: 300
+    authorizer_configuration: null
+    request_header_configuration: null
+    oauth_configuration: null
+    api_key_env_var_name: null
+    api_key_credential_provider_name: null
+    is_generated_by_agentcore_create: false

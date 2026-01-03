@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Add your description here"
 requires-python = ">=3.13"
 dependencies = [
+    "bedrock-agentcore-starter-toolkit>=0.2.5",
     "boto3>=1.42.16",
     "pydantic>=2.12.5",
     "python-dotenv>=1.2.1",
