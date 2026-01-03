@@ -1,9 +1,9 @@
-# コードスナップショット（Step 1 完了時点）
+# コードスナップショット（Step 2 完了時点）
 
-このファイルは、Step 1（同期版）完了時点でのコードを保存しています。
+このファイルは、Step 2（ストリーミング版）完了時点でのコードを保存しています。
 後日参照用として使用してください。
 
-**更新日:** Step 1 完了後
+**更新日:** Step 2 完了後
 
 ---
 
@@ -11,10 +11,14 @@
 
 ```python
 # MAGIエージェント基底クラス
+# LLM呼び出しポイント:
+# - analyze(): structured_output() 【LLM呼び出し①】
+# - analyze_stream(): stream_async() 【LLM呼び出し②】
 
 from strands import Agent
 from strands.models.bedrock import BedrockModel
 from pydantic import BaseModel, Field
+from typing import AsyncGenerator
 
 
 # =============================================================================
@@ -54,39 +58,54 @@ class MAGIAgent:
         self.persona = persona
         self.model_id = model_id
 
-        # BedrockModelを作成してAgentに渡す
+        # ※ここではLLMを呼び出していない（モデルの設定のみ）
         model = BedrockModel(
             model_id=model_id,
-            region_name="ap-northeast-1"  # 東京リージョン
+            region_name="ap-northeast-1"
         )
 
+        # ※ここではLLMを呼び出していない（エージェントの設定のみ）
+        # callback_handler=None: デフォルトのコンソール出力を無効化
         self.agent = Agent(
             model=model,
-            system_prompt=self._build_system_prompt()
+            system_prompt=self._build_system_prompt(),
+            callback_handler=None
         )
 
     def _build_system_prompt(self) -> str:
         """ペルソナに基づくシステムプロンプトを構築"""
         return f"""あなたはMAGIシステムの{self.name}です。
         {self.persona}
-
-        ## 分析の指針
-        - あなたの人格・立場に基づいた独自の視点で判断してください
-        - 論理的な理由を明確に述べてください
-        - 他のエージェントとは異なる観点を大切にしてください
-
-        ## 出力形式
-        判定は「賛成」または「反対」のいずれかで回答してください。
-        理由は200文字以内で簡潔に述べてください。
-        確信度は0.0〜1.0の数値で示してください。
+        ...
         """
 
     def analyze(self, question: str) -> AgentVerdict:
-        """問いかけを分析し判定を返す"""
-        return self.agent.structured_output(
-            AgentVerdict,                                      # 第1引数: 出力の型
-            f"以下の問いかけを分析してください: {question}"      # 第2引数: プロンプト
-            )
+        """問いかけを分析し判定を返す（同期版）"""
+        prompt = f"以下の問いかけを分析してください: {question}"
+
+        # =====================================================================
+        # 【LLM呼び出し①】structured_output() で LLM を呼び出し
+        # =====================================================================
+        return self.agent.structured_output(AgentVerdict, prompt)
+
+    async def analyze_stream(self, question: str) -> AsyncGenerator[dict, None]:
+        """問いかけを分析（非同期ストリーミング版）"""
+        prompt = f"以下の問いかけを分析してください: {question}"
+
+        # =====================================================================
+        # 【LLM呼び出し②】stream_async() で LLM を呼び出し（ストリーミング）
+        # =====================================================================
+        async for event in self.agent.stream_async(
+            prompt,
+            structured_output_model=AgentVerdict  # 1回のLLM呼び出しで両方取得
+        ):
+            if "data" in event:
+                yield {"type": "thinking", "content": event["data"]}
+
+            if "result" in event:
+                result = event["result"]
+                if hasattr(result, "structured_output") and result.structured_output:
+                    yield {"type": "verdict", "data": result.structured_output.model_dump()}
 
 # =============================================================================
 # MELCHIORエージェントクラス
@@ -208,60 +227,75 @@ class JudgeComponent:
 
 ---
 
-## agentcore/backend.py（Step 1: 同期版）
+## agentcore/backend.py（Step 2: 同期+ストリーミング版）
 
 ```python
 # backend.py - MAGIシステム バックエンド
+# LLM呼び出しフロー:
+# 1. MELCHIOR-1 → 【LLM呼び出し 1回目】
+# 2. BALTHASAR-2 → 【LLM呼び出し 2回目】
+# 3. CASPER-3 → 【LLM呼び出し 3回目】
+# 4. JudgeComponent.integrate() → LLM呼び出しなし
+# 合計: 3回のLLM呼び出し
 
 from agents.base import (
-    MelchiorAgent,
-    BalthasarAgent,
-    CasperAgent,
-    JudgeComponent,
-    FinalVerdict
+    MelchiorAgent, BalthasarAgent, CasperAgent,
+    JudgeComponent, FinalVerdict, AgentVerdict
 )
+import asyncio
+from typing import AsyncGenerator
 
 
 def run_judge_mode(question: str) -> FinalVerdict:
-    """判定モード: 3エージェント → JUDGE → 最終判定"""
-
-    # 1. エージェント作成
-    melchior = MelchiorAgent()
-    balthasar = BalthasarAgent()
-    casper = CasperAgent()
-
-
-    # 2. 各エージェントで分析
-    # リストとforループを使う
-    agents = [melchior, balthasar, casper]
+    """同期版判定モード"""
+    agents = [MelchiorAgent(), BalthasarAgent(), CasperAgent()]
     verdicts = []
     for agent in agents:
+        # 【LLM呼び出し】ここで agent.analyze() を実行
         verdict = agent.analyze(question)
         verdicts.append(verdict)
 
-    # 3. JUDGEで統合
-    # JudgeComponent をインスタンス化して、integrate() を呼ぶ
-    judge = JudgeComponent()
-    # verdicts リストを渡す
-    final_verdict = judge.integrate(verdicts)
+    # ※ここではLLMを呼び出していない（多数決ロジックのみ）
+    return JudgeComponent().integrate(verdicts)
 
-    # 4. 結果を返す
-    # integrate() の戻り値を return する
-    return final_verdict
+
+async def run_judge_mode_stream(question: str) -> AsyncGenerator[dict, None]:
+    """非同期ストリーミング版判定モード"""
+    agents = [MelchiorAgent(), BalthasarAgent(), CasperAgent()]
+    verdicts: list[AgentVerdict] = []
+
+    for agent in agents:
+        yield {"type": "agent_start", "agent": agent.name}
+
+        # 【LLM呼び出し】ここで agent.analyze_stream() を実行
+        async for event in agent.analyze_stream(question):
+            yield event
+            if event["type"] == "verdict":
+                verdicts.append(AgentVerdict(**event["data"]))
+
+        yield {"type": "agent_complete", "agent": agent.name}
+
+    # ※ここではLLMを呼び出していない（多数決ロジックのみ）
+    final_verdict = JudgeComponent().integrate(verdicts)
+    yield {"type": "final", "data": final_verdict.model_dump()}
+
+
+async def main():
+    """ストリーミング版のテスト実行"""
+    async for event in run_judge_mode_stream("AIを業務に導入すべきか？"):
+        if event["type"] == "agent_start":
+            print(f"\n=== {event['agent']} ===")
+        elif event["type"] == "thinking":
+            print(event["content"], end="")
+        elif event["type"] == "verdict":
+            print(f"\n[判定] {event['data']}")
+        elif event["type"] == "final":
+            print(f"\n\n========== 最終判定 ==========")
+            print(event["data"])
 
 
 if __name__ == "__main__":
-    result = run_judge_mode("AIを業務に導入すべきか？")
-
-    # 各エージェントの判定を確認
-    for v in result.agent_verdicts:
-        print(f"{v.agent_name}: {v.verdict} ({v.confidence})")
-        print(f"  理由: {v.reasoning}")
-        print()
-
-    print(f"最終判定: {result.verdict}")
-    print(f"投票結果: {result.vote_count}")
-    print(f"要約: {result.summary}")
+    asyncio.run(main())
 ```
 
 ---
@@ -317,7 +351,43 @@ model = BedrockModel(
 
 ---
 
+## Step 2 で学んだこと
+
+### 1. callback_handler=None の重要性
+
+```python
+# Windowsでの文字化けエラーを回避
+self.agent = Agent(
+    model=model,
+    system_prompt=prompt,
+    callback_handler=None  # デフォルトのコンソール出力を無効化
+)
+```
+
+### 2. SDK バージョンと structured_output
+
+```bash
+# バージョン確認
+pip show strands-agents
+
+# アップグレード（1.21.0以降が必要）
+pip install --upgrade strands-agents
+```
+
+### 3. 1回のLLM呼び出しでストリーミング+構造化出力
+
+```python
+# structured_output_model パラメータがポイント
+async for event in agent.stream_async(
+    prompt,
+    structured_output_model=AgentVerdict  # 1回のLLM呼び出しで両方取得
+):
+    if "result" in event:
+        verdict = event["result"].structured_output
+```
+
+---
+
 ## 次のステップ
 
-- **Step 2:** ストリーミング版（`stream_async()`）
-- **Step 3:** イベント処理（thinking, tool_use, reasoning）
+- **フロントエンド統合:** Streamlit UI でストリーミング表示を実装

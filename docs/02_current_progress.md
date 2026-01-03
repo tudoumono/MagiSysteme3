@@ -194,41 +194,123 @@ CASPER-3: 条件付き賛成 (0.75)
 
 ---
 
-## 次のタスク
+### 6. backend.py - Step 2: ストリーミング版 (B1.6) ✅
 
-### 6. backend.py - Step 2: ストリーミング版 (B1.6) 📋 ← 次はここ
+**目標:** `stream_async()` でリアルタイムイベント取得 → **完了！**
 
-**目標:** `stream_async()` でリアルタイムイベント取得
+**ファイル:** `agentcore/agents/base.py` - `analyze_stream()` メソッド
 
 ```python
-async def run_judge_mode_streaming(question: str) -> AsyncGenerator:
-    """ストリーミング対応の判定モード"""
+async def analyze_stream(self, question: str) -> AsyncGenerator[dict, None]:
+    """非同期ストリーミング版の分析"""
+    prompt = f"以下の問いかけを分析してください: {question}"
+
+    # =====================================================================
+    # 【LLM呼び出し②】stream_async() で LLM を呼び出し（ストリーミング）
+    # =====================================================================
+    # structured_output_model パラメータ:
+    #   - 1回のLLM呼び出しでストリーミング＋構造化出力を取得（SDK 1.21.0以降）
+    async for event in self.agent.stream_async(
+        prompt,
+        structured_output_model=AgentVerdict
+    ):
+        # SDKイベント → カスタムイベントに変換
+        if "data" in event:
+            yield {"type": "thinking", "content": event["data"]}
+
+        if "result" in event:
+            result = event["result"]
+            if hasattr(result, "structured_output") and result.structured_output:
+                yield {"type": "verdict", "data": result.structured_output.model_dump()}
+```
+
+**ファイル:** `agentcore/backend.py` - `run_judge_mode_stream()` 関数
+
+```python
+async def run_judge_mode_stream(question: str) -> AsyncGenerator[dict, None]:
+    """非同期判定モード（ストリーミング版）"""
+    agents = [MelchiorAgent(), BalthasarAgent(), CasperAgent()]
+    verdicts: list[AgentVerdict] = []
 
     for agent in agents:
         yield {"type": "agent_start", "agent": agent.name}
 
-        # ストリーミングでイベント取得
-        async for event in agent.agent.stream_async(prompt):
-            # イベント処理（Step 3で詳細実装）
-            pass
+        # 【LLM呼び出し】ここで agent.analyze_stream() を実行
+        async for event in agent.analyze_stream(question):
+            yield event
+            if event["type"] == "verdict":
+                verdicts.append(AgentVerdict(**event["data"]))
 
         yield {"type": "agent_complete", "agent": agent.name}
 
-    # 最終判定
-    yield {"type": "final", "data": final.model_dump()}
+    # JUDGEで統合（LLM呼び出しなし）
+    final_verdict = JudgeComponent().integrate(verdicts)
+    yield {"type": "final", "data": final_verdict.model_dump()}
 ```
 
 ---
 
-### 7. backend.py - Step 3: イベント処理 (B1.7) 📋
+### 7. backend.py - Step 3: イベント処理 (B1.7) ✅
 
-**目標:** 思考・ツール使用をストリーミング表示
+**目標:** 思考・ツール使用をストリーミング表示 → **完了！**
 
 | イベント | Strands SDKのキー | 出力形式 |
 |---------|-------------------|----------|
 | thinking | `event["data"]` | `{"type": "thinking", "content": "..."}` |
-| tool_use | `event["current_tool_use"]` | `{"type": "tool_use", "tool": "..."}` |
-| reasoning | `event["reasoning"]` | `{"type": "reasoning", "content": "..."}` |
+| tool_use | `event["current_tool_use"]` | `{"type": "tool_use", "name": "..."}` |
+| reasoning | `event["reasoning"]` + `event["reasoningText"]` | `{"type": "reasoning", "content": "..."}` |
+| verdict | `event["result"].structured_output` | `{"type": "verdict", "data": {...}}` |
+
+---
+
+## Step 2 で解決した問題
+
+### 1. Windows文字化けエラー
+
+```
+UnicodeEncodeError: 'cp932' codec can't encode character '\u26a0'
+```
+
+**原因:** デフォルトの `callback_handler` がコンソールに絵文字を出力しようとした
+
+**解決策:**
+```python
+self.agent = Agent(
+    model=model,
+    system_prompt=self._build_system_prompt(),
+    callback_handler=None  # デフォルトコールバックを無効化
+)
+```
+
+### 2. structured_output が None になる問題
+
+**原因:** SDK 1.13.0 では `stream_async()` の `result.structured_output` が機能しない
+
+**解決策:** SDK を 1.21.0 以降にアップグレード
+```bash
+pip install --upgrade strands-agents
+```
+
+### 3. 2回のLLM呼び出し問題
+
+**問題:** SDK 1.13.0 では `stream_async()` 後に `structured_output()` を別途呼ぶ必要があり、結果が異なる可能性があった
+
+**解決策:** SDK 1.21.0 以降で `structured_output_model` パラメータを使用
+```python
+async for event in self.agent.stream_async(
+    prompt,
+    structured_output_model=AgentVerdict  # 1回のLLM呼び出しで両方取得
+):
+    ...
+```
+
+---
+
+## 次のタスク
+
+### 8. フロントエンド統合 📋 ← 次はここ
+
+**目標:** Streamlit UI でストリーミング表示を実装
 
 ---
 
@@ -237,16 +319,20 @@ async def run_judge_mode_streaming(question: str) -> AsyncGenerator:
 ```
 agentcore/
 ├── agents/
-│   └── base.py          # ✅ 実装済み
+│   └── base.py          # ✅ Step 2完了（同期+ストリーミング）
 │       ├── AgentVerdict      (Pydanticモデル)
 │       ├── AgentResponse     (Pydanticモデル)
 │       ├── FinalVerdict      (Pydanticモデル)
 │       ├── MAGIAgent         (基底クラス)
+│       │   ├── analyze()           # 同期版【LLM呼び出し①】
+│       │   └── analyze_stream()    # 非同期版【LLM呼び出し②】
 │       ├── MelchiorAgent     (科学者)
 │       ├── BalthasarAgent    (母親)
 │       ├── CasperAgent       (女性)
 │       └── JudgeComponent    (統合判定)
-├── backend.py           # ✅ Step 1完了（同期版）
+├── backend.py           # ✅ Step 2完了（同期+ストリーミング）
+│   ├── run_judge_mode()        # 同期版
+│   └── run_judge_mode_stream() # 非同期ストリーミング版
 └── requirements.txt
 ```
 
@@ -258,8 +344,11 @@ agentcore/
 
 1. **BedrockModel** - Amazon Bedrockのモデルをラップ
 2. **Agent** - LLMエージェントの基本単位
-3. **structured_output()** - Pydanticモデルで出力を構造化
-4. **system_prompt** - エージェントの人格・役割を定義
+3. **structured_output()** - Pydanticモデルで出力を構造化（同期版）
+4. **stream_async()** - 非同期ストリーミングでイベント取得
+5. **structured_output_model** - stream_async()と併用して1回のLLM呼び出しで構造化出力も取得
+6. **callback_handler=None** - デフォルトのコンソール出力を無効化（Windows対応）
+7. **system_prompt** - エージェントの人格・役割を定義
 
 ### Pythonのパターン
 
@@ -269,6 +358,9 @@ agentcore/
 4. **クラス変数** - `SYSTEM_PROMPT`で定数を定義
 5. **ジェネレータ式** - `sum(1 for v in verdicts if v.verdict == "賛成")`
 6. **`in`演算子の順序** - `"賛成" in v.verdict`（部分文字列チェック）
+7. **AsyncGenerator** - `async def ... -> AsyncGenerator[dict, None]`
+8. **async for + yield** - 非同期イテレーションとジェネレータの組み合わせ
+9. **asyncio.run()** - 同期コンテキストから非同期関数を実行
 
 ### Pydanticモデルの使い分け
 
@@ -325,3 +417,59 @@ self._build_system_prompt()  # ← MelchiorAgentでオーバーライドされ�
     ↓
 MelchiorAgent._build_system_prompt()  # 子クラスのメソッドが呼ばれる
 ```
+
+---
+
+## Step 2 実装で学んだこと
+
+### 1. callback_handler の役割
+
+```python
+# デフォルト: SDKが自動でコンソールに出力する
+self.agent = Agent(model=model, system_prompt=prompt)
+
+# callback_handler=None: 自分でイベントを制御
+self.agent = Agent(model=model, system_prompt=prompt, callback_handler=None)
+```
+
+**学び:** ストリーミング時は `callback_handler=None` を指定して、イベントを自分で処理する
+
+### 2. SDK バージョンの重要性
+
+| バージョン | stream_async + structured_output |
+|-----------|----------------------------------|
+| 1.13.0 | ❌ result.structured_output が None |
+| 1.21.0+ | ✅ 正常に動作 |
+
+**学び:** SDKのバージョンが古いと機能が動かない場合がある。`pip show strands-agents` で確認
+
+### 3. 1回 vs 2回のLLM呼び出し
+
+```python
+# ❌ 2回のLLM呼び出し（SDK 1.13.0での回避策）
+async for event in agent.stream_async(prompt):
+    ...  # ストリーミング
+verdict = agent.structured_output(AgentVerdict, prompt)  # 別のLLM呼び出し
+
+# ✅ 1回のLLM呼び出し（SDK 1.21.0+）
+async for event in agent.stream_async(prompt, structured_output_model=AgentVerdict):
+    if "result" in event:
+        verdict = event["result"].structured_output  # 同じLLM呼び出しから取得
+```
+
+**学び:** 2回呼び出すと結果が異なる可能性がある。1回で完結させるのがベスト
+
+### 4. LLM呼び出しポイントの明確化
+
+コード内でLLM呼び出しを明示的にコメントで記録:
+
+```python
+# =====================================================================
+# 【LLM呼び出し①】structured_output() で LLM を呼び出し
+# =====================================================================
+# - 送信内容: prompt + system_prompt
+# - 受信内容: AgentVerdict 形式の構造化データ
+# - 呼び出し回数: 1回
+```
+
+**学び:** LLM呼び出しは見えにくいので、コメントで明示しておくと理解しやすい
