@@ -330,7 +330,7 @@ def render_final_verdict(final_data: dict):
 
 
 
-def invoke_magi_agent(question: str, runtime_arn: str) -> Generator:
+def invoke_magi_agent(question: str, runtime_arn: str, mode: str = "judge", format: str = "explicit") -> Generator:
     """
     AgentCore Runtimeを呼び出してMAGIエージェントを実行
     ストリーミングレスポンスを返す
@@ -339,6 +339,8 @@ def invoke_magi_agent(question: str, runtime_arn: str) -> Generator:
         question: ユーザーの問いかけ
         runtime_arn: AgentCore Runtime ARN
             例: arn:aws:bedrock-agentcore:ap-northeast-1:262152767881:runtime/backend-bLxzrQ5K5B
+        mode: 動作モード（"judge" = 判定モード, "chat" = 会話モード）
+        format: 会話モード時の回答形式（"explicit" = 明示的, "natural" = 自然な統合）
 
     Yields:
         dict: イベント辞書（agent_start, thinking, verdict, final など）
@@ -348,7 +350,11 @@ def invoke_magi_agent(question: str, runtime_arn: str) -> Generator:
 
     try:
         # ペイロードをJSON → bytes に変換
-        payload = json.dumps({"question": question}).encode('utf-8')
+        payload = json.dumps({
+            "question": question,
+            "mode": mode,
+            "format": format
+        }).encode('utf-8')
 
         # AgentCore Runtime を呼び出し
         response = client.invoke_agent_runtime(
@@ -485,8 +491,18 @@ def mock_magi_response(question: str) -> dict:
 def mock_chat_response(question: str) -> dict:
     """
     デモ用のモックレスポンス（会話モード）
-    3賢者がそれぞれの観点から自由に回答
+    3賢者がそれぞれの観点から自由に回答 + JUDGE統合回答
     """
+    integrated = f"""「{question}」について、3つの観点から総合的にお答えします。
+
+**科学的観点からは**、データや論理に基づいて事実関係を整理することが重要です。客観的な分析を行い、根拠に基づいた結論を導き出すことをお勧めします。
+
+**保護者の観点からは**、関係者への影響やリスクを慎重に考慮する必要があります。長期的な視点で、皆が安心できる選択を心がけることが大切です。
+
+**人間的な観点からは**、人々の気持ちや社会的な影響を考えると、共感と理解が欠かせません。心に寄り添った判断ができると良いでしょう。
+
+これら3つの視点をバランスよく考慮することで、より良い判断ができるはずです。"""
+
     return {
         "melchior": {
             "response": f"科学的な観点からお答えします。「{question}」について、データや論理に基づいて考えると、まず事実関係を整理することが重要です。客観的な分析を行い、根拠に基づいた結論を導き出すことをお勧めします。"
@@ -496,7 +512,8 @@ def mock_chat_response(question: str) -> dict:
         },
         "casper": {
             "response": f"人間的な感情の観点からお伝えします。「{question}」について、人々の気持ちや社会的な影響を考えると、共感と理解が大切です。心に寄り添った判断ができるといいですね。"
-        }
+        },
+        "integrated": integrated
     }
 
 
@@ -642,33 +659,46 @@ def main():
                 else:
                     # 会話モード
                     response = mock_chat_response(question)
-                    
-                    # 3カラムで各エージェントの回答を表示
-                    col1, col2, col3 = st.columns(3)
-                    
-                    with col1:
-                        render_chat_card(
-                            "MELCHIOR-1",
-                            "🔬 科学者 - 論理的分析",
-                            "melchior",
-                            response["melchior"]["response"]
-                        )
-                    
-                    with col2:
-                        render_chat_card(
-                            "BALTHASAR-2",
-                            "🛡️ 母親 - 保護的観点",
-                            "balthasar",
-                            response["balthasar"]["response"]
-                        )
-                    
-                    with col3:
-                        render_chat_card(
-                            "CASPER-3",
-                            "💜 女性 - 人間的感情",
-                            "casper",
-                            response["casper"]["response"]
-                        )
+
+                    # JUDGE統合回答を先に表示（会話モードのメイン回答）
+                    integrated = response.get("integrated", "")
+
+                    # カード風のコンテナで表示（Markdownをレンダリング）
+                    st.markdown("""
+                    <div style="background: linear-gradient(135deg, #FFFFFF 0%, #F0FDF4 100%); border: 2px solid #10B981; border-radius: 16px; padding: 1.5rem; margin-bottom: 1.5rem;">
+                        <h3 style="color: #10B981; margin-bottom: 1rem; text-align: center;">💬 JUDGE 統合回答</h3>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    # Markdownとしてレンダリング（**太字**などが正しく表示される）
+                    st.markdown(integrated)
+
+                    # 各エージェントの回答を折りたたみで表示
+                    with st.expander("📝 各エージェントの詳細回答を見る", expanded=False):
+                        col1, col2, col3 = st.columns(3)
+
+                        with col1:
+                            render_chat_card(
+                                "MELCHIOR-1",
+                                "🔬 科学者 - 論理的分析",
+                                "melchior",
+                                response["melchior"]["response"]
+                            )
+
+                        with col2:
+                            render_chat_card(
+                                "BALTHASAR-2",
+                                "🛡️ 母親 - 保護的観点",
+                                "balthasar",
+                                response["balthasar"]["response"]
+                            )
+
+                        with col3:
+                            render_chat_card(
+                                "CASPER-3",
+                                "💜 女性 - 人間的感情",
+                                "casper",
+                                response["casper"]["response"]
+                            )
                 
             else:
                 # 本番モード: AgentCore呼び出し
@@ -685,49 +715,79 @@ def main():
                         "CASPER-3": ""
                     }
 
-                    # 各エージェントの判定結果
+                    # 各エージェントの判定結果（判定モード用）
                     agent_verdicts = {}
 
-                    # 最終判定データ
+                    # 各エージェントの回答（会話モード用）
+                    agent_responses = {}
+
+                    # 最終判定/統合回答データ
                     final_data = None
+                    chat_response_data = None
 
                     # 現在処理中のエージェント
                     current_agent = None
 
                     # 処理中表示（ステータス用プレースホルダー）
                     status_placeholder = st.empty()
-                    status_placeholder.info("🔮 MAGI システム分析中...")
+                    if is_judge_mode:
+                        status_placeholder.info("🔮 MAGI システム分析中...")
+                    else:
+                        status_placeholder.info("💬 3賢者が回答を準備中...")
 
                     # -----------------------------------------------------
                     # イベントループ（データ収集のみ）
                     # -----------------------------------------------------
-                    for event in invoke_magi_agent(question, runtime_arn):
+                    # モードに応じてAPIを呼び出し
+                    api_mode = "judge" if is_judge_mode else "chat"
+                    for event in invoke_magi_agent(question, runtime_arn, mode=api_mode):
                         event_type = event.get("type")
 
                         if event_type == "agent_start":
                             current_agent = event.get("agent")
                             agent_thinking[current_agent] = ""
-                            status_placeholder.info(f"🔮 {current_agent} 分析中...")
+                            if is_judge_mode:
+                                status_placeholder.info(f"🔮 {current_agent} 分析中...")
+                            else:
+                                status_placeholder.info(f"💬 {current_agent} 回答作成中...")
 
                         elif event_type == "thinking":
                             if current_agent:
                                 agent_thinking[current_agent] += event.get("content", "")
 
                         elif event_type == "verdict":
+                            # 判定モード: エージェントの判定結果
                             if current_agent:
                                 agent_verdicts[current_agent] = event.get("data", {})
+
+                        elif event_type == "response":
+                            # 会話モード: エージェントの回答
+                            if current_agent:
+                                agent_responses[current_agent] = event.get("data", {})
 
                         elif event_type == "agent_complete":
                             current_agent = None
 
                         elif event_type == "judge_start":
-                            status_placeholder.info("⚖️ JUDGE 統合分析中...")
+                            if is_judge_mode:
+                                status_placeholder.info("⚖️ JUDGE 統合分析中...")
+                            else:
+                                status_placeholder.info("⚖️ JUDGE 回答統合中...")
 
                         elif event_type == "judge_complete":
-                            status_placeholder.info("✅ 最終判定を生成中...")
+                            if is_judge_mode:
+                                status_placeholder.info("✅ 最終判定を生成中...")
+                            else:
+                                status_placeholder.info("✅ 統合回答を生成中...")
 
                         elif event_type == "final":
+                            # 判定モード: 最終判定
                             final_data = event.get("data", {})
+                            status_placeholder.empty()
+
+                        elif event_type == "chat_response":
+                            # 会話モード: JUDGE統合回答
+                            chat_response_data = event.get("data", {})
                             status_placeholder.empty()
 
                         elif event_type == "error":
@@ -737,8 +797,8 @@ def main():
                     # -----------------------------------------------------
                     # 結果を表示（イベント収集完了後）
                     # -----------------------------------------------------
-                    if agent_verdicts:
-                        # 3カラムで各エージェントの結果を表示
+                    if is_judge_mode and agent_verdicts:
+                        # 判定モード: 3カラムで各エージェントの結果を表示
                         col1, col2, col3 = st.columns(3)
 
                         agent_configs = [
@@ -773,7 +833,7 @@ def main():
                                     with st.expander("💭 思考プロセスを見る"):
                                         st.markdown(thinking)
 
-                    # 最終判定
+                    # 最終判定（判定モード）
                     if final_data:
                         render_final_verdict(final_data)
 
@@ -782,6 +842,59 @@ def main():
                             "verdicts": agent_verdicts,
                             "thinking": agent_thinking,
                             "final": final_data
+                        }
+
+                    # 会話モード: JUDGE統合回答を先に表示、各エージェント回答は折りたたみ
+                    elif not is_judge_mode and chat_response_data:
+                        # JUDGE統合回答を先に表示（会話モードのメイン回答）
+                        # ChatResponse モデル: response フィールドに統合された回答が格納
+                        integrated_response = chat_response_data.get("response", "")
+
+                        # カード風のコンテナで表示（Markdownをレンダリング）
+                        st.markdown("""
+                        <div style="background: linear-gradient(135deg, #FFFFFF 0%, #F0FDF4 100%); border: 2px solid #10B981; border-radius: 16px; padding: 1.5rem; margin-bottom: 1.5rem;">
+                            <h3 style="color: #10B981; margin-bottom: 1rem; text-align: center;">💬 JUDGE 統合回答</h3>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        # Markdownとしてレンダリング（**太字**などが正しく表示される）
+                        st.markdown(integrated_response)
+
+                        # 各エージェントの詳細回答を折りたたみで表示
+                        if agent_responses:
+                            with st.expander("📝 各エージェントの詳細回答を見る", expanded=False):
+                                col1, col2, col3 = st.columns(3)
+
+                                agent_configs = [
+                                    ("MELCHIOR-1", "🔬 科学者 - 論理的分析", "melchior", col1),
+                                    ("BALTHASAR-2", "🛡️ 母親 - 保護的観点", "balthasar", col2),
+                                    ("CASPER-3", "💜 女性 - 人間的感情", "casper", col3),
+                                ]
+
+                                for agent_name, role, agent_class, col in agent_configs:
+                                    response_data = agent_responses.get(agent_name, {})
+                                    response_text = response_data.get("response", "")
+                                    thinking = agent_thinking.get(agent_name, "")
+
+                                    with col:
+                                        # 会話モード用カード
+                                        render_chat_card(agent_name, role, agent_class, response_text)
+
+                        # 思考プロセスを外側の折りたたみで表示（ネスト回避）
+                        has_thinking = any(agent_thinking.get(name, "") for name in ["MELCHIOR-1", "BALTHASAR-2", "CASPER-3"])
+                        if has_thinking:
+                            with st.expander("💭 各エージェントの思考プロセスを見る", expanded=False):
+                                for agent_name in ["MELCHIOR-1", "BALTHASAR-2", "CASPER-3"]:
+                                    thinking = agent_thinking.get(agent_name, "")
+                                    if thinking:
+                                        st.markdown(f"**{agent_name}**")
+                                        st.markdown(thinking)
+                                        st.divider()
+
+                        # セッション状態に保存
+                        st.session_state.magi_results = {
+                            "responses": agent_responses,
+                            "thinking": agent_thinking,
+                            "chat_response": chat_response_data
                         }
         
         # アシスタントメッセージを履歴に追加
