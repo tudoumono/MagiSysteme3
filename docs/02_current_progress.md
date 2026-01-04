@@ -594,11 +594,40 @@ def render_final_verdict(final_data: dict):
 
 ---
 
+## Phase 2 完了: 会話モード実装 ✅
+
+### 10. 会話モードバックエンド実装
+
+**実装内容:**
+- `respond_stream()`: 会話モード用ストリーミングメソッド
+- `run_chat_mode_stream()`: 会話モードハンドラー
+- `integrate_chat()`: JUDGEによる3エージェント回答統合
+- `SlidingWindowConversationManager`: 会話履歴管理（判定/会話両モード）
+
+**API仕様:**
+```python
+payload = {
+    "question": "AIについて教えて",
+    "mode": "chat",  # "judge" | "chat"
+    "format": "explicit"  # "explicit" | "natural"
+}
+```
+
+**イベントフロー:**
+```
+agent_start → thinking... → response → agent_complete
+agent_start → thinking... → response → agent_complete
+agent_start → thinking... → response → agent_complete
+judge_start → judge_complete → chat_response
+```
+
+---
+
 ## 次のタスク
 
-### 10. 会話モード実装 📋 ← 次はここ
+### Phase 3: ロール設定 📋 ← 次はここ
 
-**目標:** Streamlit で会話モードを実装（Phase 2）
+**目標:** エージェントのロール（人格）をカスタマイズ可能にする
 
 ---
 
@@ -608,13 +637,15 @@ def render_final_verdict(final_data: dict):
 MagiSysteme3/
 ├── agentcore/               # バックエンド（AWS AgentCore）
 │   ├── agents/
-│   │   └── base.py              # ✅ Step 2完了（同期+ストリーミング）
+│   │   └── base.py              # ✅ Phase 2完了（会話モード対応）
 │   │       ├── AgentVerdict          (Pydanticモデル)
 │   │       ├── AgentResponse         (Pydanticモデル)
+│   │       ├── ChatResponse          (Pydanticモデル) ← NEW
 │   │       ├── FinalVerdict          (Pydanticモデル)
 │   │       ├── MAGIAgent             (基底クラス)
 │   │       │   ├── analyze()              # 同期版【LLM呼び出し①】
-│   │       │   └── analyze_stream()       # 非同期版【LLM呼び出し②】
+│   │       │   ├── analyze_stream()       # 非同期版【LLM呼び出し②】
+│   │       │   └── respond_stream()       # 会話モード【LLM呼び出し③】← NEW
 │   │       ├── MelchiorAgent         (科学者)
 │   │       ├── BalthasarAgent        (母親)
 │   │       ├── CasperAgent           (女性)
@@ -975,6 +1006,59 @@ def render_final_verdict(final_data: dict):
 ```
 
 **学び:** `FinalVerdict.agent_verdicts` には各エージェントの完全な判定情報（理由、確信度）が含まれている。最終判定画面でこの情報を表示することで、ユーザーは「なぜこの結論に至ったか」を詳しく確認できる。
+
+---
+
+---
+
+## 今後の拡張
+
+### AgentCore Session Memory（永続化メモリ）
+
+**現在の実装:**
+- 会話モード: `SlidingWindowConversationManager`（インメモリ）
+- 判定モード: `SlidingWindowConversationManager`（インメモリ）
+  - 判定結果を元に「もう少し詳しく」などの追加質問に対応可能
+
+**課題:**
+- インメモリのため、セッション終了で履歴が消える
+- サーバー再起動で履歴がリセットされる
+
+**将来の拡張案:**
+AgentCore Session Memoryを使用することで、以下が可能になる:
+
+| 機能 | 現在 | AgentCore Memory |
+|------|------|------------------|
+| 永続化 | ❌ セッション内のみ | ✅ DynamoDB保存 |
+| セマンティック検索 | ❌ なし | ✅ 類似会話を検索 |
+| セッション管理 | ❌ なし | ✅ session_id で管理 |
+| 複数デバイス | ❌ 不可 | ✅ 同一ユーザーで共有 |
+
+**移行方法:**
+```python
+# 現在（Strands Conversation Manager）
+from strands.agent.conversation_manager import SlidingWindowConversationManager
+
+self.chat_agent = Agent(
+    model=model,
+    conversation_manager=SlidingWindowConversationManager(window_size=20)
+)
+
+# 将来（AgentCore Session Memory）
+from strands.agent.conversation_manager import AgentCoreMemorySessionManager
+
+self.chat_agent = Agent(
+    model=model,
+    session_manager=AgentCoreMemorySessionManager(
+        session_id="user-123",
+        memory_id="magi-memory"
+    )
+)
+```
+
+**実装タイミング:**
+- Phase 2完了後、ユーザー管理機能と合わせて検討
+- DynamoDBのコストも考慮（現在は無料枠で運用中）
 
 ---
 

@@ -68,6 +68,9 @@ from strands.models.bedrock import BedrockModel
 from pydantic import BaseModel, Field
 from typing import AsyncGenerator
 
+# strandsのConversationManager　会話を管理するクラス
+from strands.agent.conversation_manager import SlidingWindowConversationManager
+
 
 # =============================================================================
 # Pydanticモデル（構造化出力用）
@@ -77,6 +80,9 @@ from typing import AsyncGenerator
 # Field(description=...) でLLMに出力形式を伝えます。
 # =============================================================================
 
+# =============================================================================
+# AgentVerdict（エージェント判定結果）
+# =============================================================================
 class AgentVerdict(BaseModel):
     """
     エージェントの判定結果
@@ -95,7 +101,9 @@ class AgentVerdict(BaseModel):
     reasoning: str = Field(description="判定理由（200文字以内）")
     confidence: float = Field(ge=0.0, le=1.0, description="確信度")
 
-
+# =============================================================================
+# AgentResponse（会話モード回答）
+# =============================================================================
 class AgentResponse(BaseModel):
     """
     エージェントの会話モード回答（Phase 2で使用予定）
@@ -107,7 +115,26 @@ class AgentResponse(BaseModel):
     agent_name: str = Field(description="エージェント名")
     response: str = Field(description="回答内容")
 
+# =============================================================================
+# JudgeSummary（JUDGE統合分析結果）
+# =============================================================================
 
+class JudgeSummary(BaseModel):
+    """
+    JUDGEによる統合分析結果（LLMが生成）
+
+    Attributes:
+        summary: 3エージェントの意見を踏まえた統合的な分析サマリー
+        key_points: 主要な論点（箇条書き）
+        recommendation: 最終的な推奨事項
+    """
+    summary: str = Field(description="3エージェントの意見を踏まえた統合的な分析サマリー（200文字程度）")
+    key_points: list[str] = Field(description="主要な論点を3つ程度の箇条書きで")
+    recommendation: str = Field(description="最終的な推奨事項（100文字程度）")
+
+# =============================================================================
+# FinalVerdict（最終統合判定）
+# =============================================================================
 class FinalVerdict(BaseModel):
     """
     最終判定結果（JudgeComponentが生成）
@@ -125,6 +152,42 @@ class FinalVerdict(BaseModel):
     vote_count: dict = Field(description="投票数 {'賛成': n, '反対': m}")
     agent_verdicts: list[AgentVerdict] = Field(description="各エージェントの判定")
 
+
+
+# =============================================================================
+# ChatResponse （会話モードの統合回答）
+# =============================================================================
+
+class ChatResponse(BaseModel):
+    """
+    会話モードの統合回答（JUDGEが生成）
+
+    3エージェントの視点を統合した回答を格納。
+    format で出力形式を選択可能。
+
+    Attributes:
+        response: 統合された回答
+        format: 回答形式（"explicit" または "natural"）
+    """
+    response: str = Field(description="3エージェントの視点を統合した回答")
+    format: str = Field(description="回答形式: explicit（視点を明示）または natural（自然な統合）")
+
+# =============================================================================
+# JudgeSummary（JUDGE統合分析結果）
+# =============================================================================
+
+class JudgeSummary(BaseModel):
+    """
+    JUDGEによる統合分析結果（LLMが生成）
+
+    Attributes:
+        summary: 3エージェントの意見を踏まえた統合的な分析サマリー
+        key_points: 主要な論点（箇条書き）
+        recommendation: 最終的な推奨事項
+    """
+    summary: str = Field(description="3エージェントの意見を踏まえた統合的な分析サマリー（200文字程度）")
+    key_points: list[str] = Field(description="主要な論点を3つ程度の箇条書きで")
+    recommendation: str = Field(description="最終的な推奨事項（100文字程度）")
 
 # =============================================================================
 # MAGIエージェント基底クラス
@@ -149,12 +212,7 @@ class MAGIAgent:
         analyze_stream(): 非同期ストリーミング版の分析（Step 2で実装）
     """
 
-    def __init__(
-        self,
-        name: str,
-        persona: str,
-        model_id: str = "jp.anthropic.claude-haiku-4-5-20251001-v1:0"
-    ):
+    def __init__(self,name: str,persona: str,model_id: str = "jp.anthropic.claude-haiku-4-5-20251001-v1:0"):
         """
         エージェントを初期化
 
@@ -179,18 +237,49 @@ class MAGIAgent:
         )
 
         # ---------------------------------------------------------------------
-        # Agentの作成
+        # 判定モード用Agentの作成
         # ---------------------------------------------------------------------
         # ※ここではLLMを呼び出していない（エージェントの設定のみ）
+        # 判定モードでも会話履歴を保持する理由:
+        #   - 判定結果を元に「もう少し詳しく」などの追加質問に対応
+        #   - 不足情報を補足して再判定を依頼できる
         # callback_handler=None:
         #   デフォルトのコンソール出力を無効化
         #   これにより、stream_async()のイベントを自分で制御できる
         #   Windowsでの文字化け・絵文字エラーも回避できる
         self.agent = Agent(
-            model=model,
-            system_prompt=self._build_system_prompt(),
-            callback_handler=None  # ストリーミング時はデフォルトコールバックを無効化
+                model=model,
+                system_prompt=self._build_system_prompt(),
+                callback_handler=None,  # ストリーミング時はデフォルトコールバックを無効化
+                conversation_manager=SlidingWindowConversationManager(
+                    window_size=20,  # 会話履歴のウィンドウサイズ
+                    should_truncate_results=True  # 結果を切り詰める
+                )
         )
+
+        # ---------------------------------------------------------------------
+        # 会話モード用Agentの作成
+        # ---------------------------------------------------------------------
+        # 判定モード（self.agent）とは別のエージェントを用意する理由:
+        # 1. システムプロンプトが異なる（判定用 vs 会話用）
+        # 2. 会話履歴を分離する（判定の履歴と会話の履歴は混ぜない）
+        # 3. それぞれのモードで独立した文脈を維持できる
+        #
+        # SlidingWindowConversationManager:
+        #   - 会話履歴を管理し、過去のやり取りを記憶
+        #   - window_size=20: 直近20ターンの会話を保持
+        #   - should_truncate_results=True: 古い履歴は切り詰め（メモリ節約）
+        self.chat_agent = Agent(
+            model=model,
+            system_prompt=self._build_chat_prompt(),
+            callback_handler=None,  # ストリーミング時はデフォルトコールバックを無効化
+            conversation_manager=SlidingWindowConversationManager(
+                window_size=20,  # 会話履歴のウィンドウサイズ
+                should_truncate_results=True  # 結果を切り詰める
+            )
+        )
+
+
 
     def _build_system_prompt(self) -> str:
         """
@@ -214,6 +303,30 @@ class MAGIAgent:
         理由は200文字以内で簡潔に述べてください。
         確信度は0.0〜1.0の数値で示してください。
         """
+
+    def _build_chat_prompt(self) -> str:
+        """
+        会話モード用のシステムプロンプトを構築
+        
+        サブクラスでオーバーライドして、固有のプロンプトを返すことも可能。
+        
+        Returns:
+            システムプロンプト文字列
+        """
+        return f"""あなたはMAGIシステムの{self.name}です。
+{self.persona}
+
+## あなたの役割
+- ユーザーとの対話において、あなた固有の視点から意見や情報を提供する
+- 判定（賛成/反対）は行わず、自分の視点からの考えを自由に述べる
+- 他のエージェント（MELCHIOR: 科学者、BALTHASAR: 母親、CASPER: 女性）とは異なる観点を大切にする
+
+## 対話の指針
+- 丁寧に、しかし簡潔に回答する（200文字程度を目安）
+- 質問があれば掘り下げて回答する
+- 自分の視点ならではの気づきを提供する
+"""
+
 
     # =========================================================================
     # Step 1: 同期版分析メソッド
@@ -294,6 +407,26 @@ class MAGIAgent:
         # structured_output_model パラメータ:
         #   - LLMの出力をAgentVerdict形式に制約
         #   - result イベントで .structured_output として取得可能
+        #
+        # ---------------------------------------------------------------------
+        # SDKイベント（Strands SDK が返す形式）:
+        #   - event["init_event_loop"]: 初期化
+        #   - event["start_event_loop"]: ループ開始
+        #   - event["data"]: テキストチャンク（LLMの出力）
+        #   - event["reasoning"]: 推論（Interleaved Thinking時）
+        #   - event["current_tool_use"]: ツール使用情報
+        #   - event["complete"]: サイクル完了
+        #   - event["result"]: 最終結果（.structured_output で AgentVerdict 取得）
+        #
+        # カスタムイベント（MAGI独自形式、フロントエンドに返す）:
+        #   - {"type": "init"}: 初期化
+        #   - {"type": "loop_start"}: ループ開始
+        #   - {"type": "thinking", "content": str}: 思考プロセス
+        #   - {"type": "reasoning", "content": str}: 推論
+        #   - {"type": "tool_use", "name": str}: ツール使用
+        #   - {"type": "complete"}: 完了
+        #   - {"type": "verdict", "data": dict}: 判定結果
+        # ---------------------------------------------------------------------
         async for event in self.agent.stream_async(
             prompt,
             structured_output_model=AgentVerdict
@@ -337,6 +470,53 @@ class MAGIAgent:
                 if hasattr(result, "structured_output") and result.structured_output:
                     # model_dump(): Pydanticモデルを辞書に変換
                     yield {"type": "verdict", "data": result.structured_output.model_dump()}
+
+
+    # =========================================================================
+    # 会話モード用メソッド
+    # =========================================================================
+
+    async def respond_stream(self, question: str) -> AsyncGenerator[dict, None]:
+        """
+        会話モード: 判定なしで自由に回答（ストリーミング版）
+
+        判定モードとの違い:
+        - AgentVerdict ではなく AgentResponse を使用
+        - 「賛成/反対」ではなく自由形式の回答
+        - システムプロンプトも会話用（_build_chat_prompt）
+
+        Args:
+            question: ユーザーからの質問
+
+        Yields:
+            dict: イベント辞書
+                - {"type": "thinking", "content": str}: 思考プロセス
+                - {"type": "response", "data": dict}: 回答（AgentResponse形式）
+        """
+        prompt = f"以下の質問に、あなたの視点から回答してください: {question}"
+
+        # =====================================================================
+        # 【LLM呼び出し】stream_async() で会話応答を取得
+        # =====================================================================
+        #
+        # SDKイベント → カスタムイベント変換:
+        #   - event["data"] → {"type": "thinking", "content": str}
+        #   - event["result"].structured_output → {"type": "response", "data": dict}
+        #
+        async for event in self.chat_agent.stream_async(
+            prompt,
+            structured_output_model=AgentResponse
+        ):
+            # thinking: テキストチャンク
+            if "data" in event:
+                yield {"type": "thinking", "content": event["data"]}
+
+            # result: 最終結果
+            if "result" in event:
+                result = event["result"]
+                if hasattr(result, "structured_output") and result.structured_output:
+                    yield {"type": "response", "data": result.structured_output.model_dump()}
+
 
 
 # =============================================================================
@@ -444,26 +624,10 @@ class CasperAgent(MAGIAgent):
         return self.SYSTEM_PROMPT
 
 
-# =============================================================================
-# JudgeSummary（JUDGE統合分析結果）
-# =============================================================================
-
-class JudgeSummary(BaseModel):
-    """
-    JUDGEによる統合分析結果（LLMが生成）
-
-    Attributes:
-        summary: 3エージェントの意見を踏まえた統合的な分析サマリー
-        key_points: 主要な論点（箇条書き）
-        recommendation: 最終的な推奨事項
-    """
-    summary: str = Field(description="3エージェントの意見を踏まえた統合的な分析サマリー（200文字程度）")
-    key_points: list[str] = Field(description="主要な論点を3つ程度の箇条書きで")
-    recommendation: str = Field(description="最終的な推奨事項（100文字程度）")
 
 
 # =============================================================================
-# JudgeComponent（LLM as a Judge）
+# JudgeComponent（判定統合コンポーネント）
 # =============================================================================
 
 class JudgeComponent:
@@ -596,8 +760,7 @@ class JudgeComponent:
 - 確信度: {v.confidence}
 """
 
-        prompt = f"""
-以下の問いかけに対する3エージェントの判定を統合分析してください。
+        prompt = f"""以下の問いかけに対する3エージェントの判定を統合分析してください。
 
 ## 問いかけ
 {question}
@@ -644,3 +807,60 @@ class JudgeComponent:
             vote_count={"賛成": approve_count, "反対": reject_count},
             agent_verdicts=verdicts
         )
+
+    def integrate_chat(self,question: str,responses: list[AgentResponse],format: str = "explicit") -> ChatResponse:
+        """
+        会話モード: 3エージェントの回答を統合
+
+        Args:
+            question: ユーザーからの質問
+            responses: 各エージェントの回答リスト
+            format: 回答形式
+                - "explicit": 各視点を明示的に含める
+                - "natural": 自然な1つの回答として統合
+
+        Returns:
+            ChatResponse: 統合された回答
+        """
+        # 各エージェントの回答を文字列にフォーマット
+        responses_text = ""
+        for r in responses:
+            responses_text += f"""
+【{r.agent_name}】
+{r.response}
+"""
+
+        if format == "explicit":
+            prompt = f"""以下の質問に対する3エージェントの回答を統合してください。
+各エージェントの視点を明示的に含めてください。
+
+## 質問
+{question}
+
+## 各エージェントの回答
+{responses_text}
+
+## 出力形式
+「科学的観点からは〜、保護者の観点からは〜、人間的な観点からは〜」
+のように、各視点を明示しながら統合してください。
+"""
+        else:  # natural
+            prompt = f"""以下の質問に対する3エージェントの回答を統合してください。
+自然な1つの回答として統合してください（視点の明示は不要）。
+
+## 質問
+{question}
+
+## 各エージェントの回答
+{responses_text}
+
+## 出力形式
+3つの視点を自然に織り交ぜた、読みやすい回答を作成してください。
+"""
+
+        # =====================================================================
+        # 【LLM呼び出し】JUDGE会話統合
+        # =====================================================================
+        result = self.agent.structured_output(ChatResponse, prompt)
+        return result
+

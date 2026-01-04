@@ -260,25 +260,128 @@ async def main():
             print(f"\n\n========== 最終判定 ==========")
             print(event["data"])
 
+# =============================================================================
+# 会話モード（ストリーミング版）
+# =============================================================================
+
+async def run_chat_mode_stream(question: str, format: str = "explicit") -> AsyncGenerator[dict, None]:
+    """
+    会話モード: 3エージェントが各視点から回答 → JUDGEが統合（ストリーミング版）
+
+    処理フロー:
+    1. 3エージェント作成
+    2. 各エージェントで respond_stream() を実行（内部で回答を収集）
+    3. JUDGEが3つの回答を統合
+
+    イベントフロー:
+    ┌─────────────────────────────────────────────────────────────┐
+    │ agent_start → thinking... → response → agent_complete      │
+    │ agent_start → thinking... → response → agent_complete      │
+    │ agent_start → thinking... → response → agent_complete      │
+    │ judge_start → judge_complete → chat_response               │
+    └─────────────────────────────────────────────────────────────┘
+
+    Args:
+        question: ユーザーからの質問
+        format: 回答形式（"explicit" または "natural"）
+
+    Yields:
+        dict: イベント辞書
+            - {"type": "agent_start", "agent": "MELCHIOR-1"}
+            - {"type": "thinking", "content": "..."}
+            - {"type": "response", "data": {...}}
+            - {"type": "agent_complete", "agent": "..."}
+            - {"type": "judge_start"}
+            - {"type": "judge_complete"}
+            - {"type": "chat_response", "data": {...}}
+    """
+    from agents.base import AgentResponse
+    
+    # -------------------------------------------------------------------------
+    # 1. エージェント作成
+    # -------------------------------------------------------------------------
+    melchior = MelchiorAgent()
+    balthasar = BalthasarAgent()
+    casper = CasperAgent()
+    agents = [melchior, balthasar, casper]
+
+    # -------------------------------------------------------------------------
+    # 2. 各エージェントの回答を収集
+    # -------------------------------------------------------------------------
+    # responses リストの構成:
+    # [
+    #   AgentResponse(agent_name="MELCHIOR-1", response="科学的観点からは..."),
+    #   AgentResponse(agent_name="BALTHASAR-2", response="保護者の観点からは..."),
+    #   AgentResponse(agent_name="CASPER-3", response="人間的な観点からは...")
+    # ]
+    # → JUDGEの integrate_chat() に渡して統合回答を生成
+    responses: list[AgentResponse] = []
+
+    for agent in agents:
+        # エージェント開始イベント
+        yield {"type": "agent_start", "agent": agent.name}
+
+        # 【LLM呼び出し】agent.respond_stream() を実行
+        async for event in agent.respond_stream(question):
+            yield event
+
+            # response イベントから回答を収集
+            if event["type"] == "response":
+                response_data = event["data"]
+                response = AgentResponse(**response_data)
+                responses.append(response)
+
+        # エージェント完了イベント
+        yield {"type": "agent_complete", "agent": agent.name}
+
+    # -------------------------------------------------------------------------
+    # 3. JUDGEで統合
+    # -------------------------------------------------------------------------
+    yield {"type": "judge_start"}
+
+    judge = JudgeComponent()
+    chat_response = judge.integrate_chat(question, responses, format)
+
+    yield {"type": "judge_complete"}
+
+    # 統合回答イベント
+    yield {"type": "chat_response", "data": chat_response.model_dump()}
+
 
 # ============ エントリーポイント ============
 @app.entrypoint
 async def invoke(payload: dict):
     """
     AgentCore エントリーポイント（ストリーミング版）
-    
+
     Args:
-        payload: {"question": "AIを導入すべきか？"}
-    
+        payload: {
+            "question": "AIを導入すべきか？",
+            "mode": "judge" | "chat",  # オプション、デフォルト: "judge"
+            "format": "explicit" | "natural"  # chatモード時のみ、デフォルト: "explicit"
+        }
+
     Yields:
         各イベント（thinking, verdict, final など）
     """
-    # 1. payloadから question を取り出す
+    # -------------------------------------------------------------------------
+    # 1. payloadからパラメータを取り出す
+    # -------------------------------------------------------------------------
     question = payload.get("question", "")
-    
-    # 2. ストリーミング版を呼び出し、イベントをそのまま yield
-    async for event in run_judge_mode_stream(question):
-        yield event
+    mode = payload.get("mode", "judge")  # デフォルト: 判定モード
+    format = payload.get("format", "explicit")  # デフォルト: 明示的形式
+
+    # -------------------------------------------------------------------------
+    # 2. モードに応じて適切なハンドラーを呼び出す
+    # -------------------------------------------------------------------------
+    if mode == "chat":
+        # 会話モード: 多角的な回答を統合
+        async for event in run_chat_mode_stream(question, format):
+            yield event
+    else:
+        # 判定モード（デフォルト）: 賛成/反対の判定
+        async for event in run_judge_mode_stream(question):
+            yield event
 
 
 
